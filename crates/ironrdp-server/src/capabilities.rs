@@ -2,7 +2,7 @@ use ironrdp_pdu::rdp::capability_sets::{self, GeneralExtraFlags};
 
 use crate::{DesktopSize, RdpServerOptions};
 
-pub(crate) fn capabilities(_opts: &RdpServerOptions, size: DesktopSize) -> Vec<capability_sets::CapabilitySet> {
+pub(crate) fn capabilities(opts: &RdpServerOptions, size: DesktopSize) -> Vec<capability_sets::CapabilitySet> {
     vec![
         capability_sets::CapabilitySet::General(general_capabilities()),
         capability_sets::CapabilitySet::Bitmap(bitmap_capabilities(&size)),
@@ -12,7 +12,7 @@ pub(crate) fn capabilities(_opts: &RdpServerOptions, size: DesktopSize) -> Vec<c
         capability_sets::CapabilitySet::Input(input_capabilities()),
         capability_sets::CapabilitySet::VirtualChannel(virtual_channel_capabilities()),
         capability_sets::CapabilitySet::MultiFragmentUpdate(multifragment_update()),
-        capability_sets::CapabilitySet::BitmapCodecs(bitmap_codecs()),
+        capability_sets::CapabilitySet::BitmapCodecs(bitmap_codecs(opts.with_remote_fx)),
     ]
 }
 
@@ -28,7 +28,9 @@ fn bitmap_capabilities(size: &DesktopSize) -> capability_sets::Bitmap {
         pref_bits_per_pix: 32,
         desktop_width: size.width,
         desktop_height: size.height,
-        desktop_resize_flag: false,
+        // This makes freerdp keep the flag up and handle desktop resize/deactivation-reactivation.
+        // Likely okay to advertize if the server doesn't resize anyway.
+        desktop_resize_flag: true,
         drawing_flags: capability_sets::BitmapDrawingFlags::empty(),
     }
 }
@@ -86,17 +88,19 @@ fn multifragment_update() -> capability_sets::MultifragmentUpdate {
     }
 }
 
-fn bitmap_codecs() -> capability_sets::BitmapCodecs {
-    capability_sets::BitmapCodecs(vec![
-        capability_sets::Codec {
+fn bitmap_codecs(with_remote_fx: bool) -> capability_sets::BitmapCodecs {
+    let mut codecs = Vec::new();
+    if with_remote_fx {
+        codecs.push(capability_sets::Codec {
             id: 0,
             property: capability_sets::CodecProperty::RemoteFx(capability_sets::RemoteFxContainer::ServerContainer(1)),
-        },
-        capability_sets::Codec {
+        });
+        codecs.push(capability_sets::Codec {
             id: 0,
             property: capability_sets::CodecProperty::ImageRemoteFx(
                 capability_sets::RemoteFxContainer::ServerContainer(1),
             ),
-        },
-    ])
+        });
+    }
+    capability_sets::BitmapCodecs(codecs)
 }

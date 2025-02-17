@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://cdnweb.devolutions.net/images/projects/devolutions/logos/devolutions-icon-shadow.svg")]
 #![allow(clippy::arithmetic_side_effects)] // FIXME: remove
 #![allow(clippy::cast_lossless)] // FIXME: remove
 #![allow(clippy::cast_possible_truncation)] // FIXME: remove
@@ -8,10 +9,10 @@
 #[macro_use]
 extern crate tracing;
 
-use ironrdp_pdu::cursor::ReadCursor;
+use ironrdp_core::{decode_cursor, impl_as_any, ReadCursor};
 use ironrdp_pdu::gcc::ChannelName;
-use ironrdp_pdu::{decode_cursor, other_err, PduResult};
-use ironrdp_svc::{impl_as_any, CompressionCondition, SvcClientProcessor, SvcMessage, SvcProcessor};
+use ironrdp_pdu::{decode_err, pdu_other_err, PduResult};
+use ironrdp_svc::{CompressionCondition, SvcClientProcessor, SvcMessage, SvcProcessor};
 use pdu::efs::{
     Capabilities, ClientDeviceListAnnounce, ClientNameRequest, ClientNameRequestUnicodeFlag, CoreCapability,
     CoreCapabilityKind, DeviceControlRequest, DeviceIoRequest, DeviceType, Devices, ServerDeviceAnnounceResponse,
@@ -40,7 +41,7 @@ pub struct Rdpdr {
     /// The name of the computer that is running the client.
     ///
     /// Any directories shared will be displayed by File Explorer
-    /// as "<directory> on <computer_name>".
+    /// as "`<directory>` on `<computer_name>`".
     computer_name: String,
     capabilities: Capabilities,
     /// Pre-configured list of devices to announce to the server.
@@ -56,8 +57,6 @@ impl Rdpdr {
     pub const NAME: ChannelName = ChannelName::from_static(b"rdpdr\0\0\0");
 
     /// Creates a new [`Rdpdr`].
-    ///
-    /// See [`Rdpdr::computer_name`].
     pub fn new(backend: Box<dyn RdpdrBackend>, computer_name: String) -> Self {
         Self {
             computer_name,
@@ -106,7 +105,8 @@ impl Rdpdr {
     }
 
     fn handle_server_announce(&mut self, req: VersionAndIdPdu) -> PduResult<Vec<SvcMessage>> {
-        let client_announce_reply = RdpdrPdu::VersionAndIdPdu(VersionAndIdPdu::new_client_announce_reply(req)?);
+        let client_announce_reply =
+            RdpdrPdu::VersionAndIdPdu(VersionAndIdPdu::new_client_announce_reply(req).map_err(|e| decode_err!(e))?);
         trace!("sending {:?}", client_announce_reply);
 
         let client_name_request = RdpdrPdu::ClientNameRequest(ClientNameRequest::new(
@@ -148,10 +148,15 @@ impl Rdpdr {
         dev_io_req: DeviceIoRequest,
         src: &mut ReadCursor<'_>,
     ) -> PduResult<Vec<SvcMessage>> {
-        match self.device_list.for_device_type(dev_io_req.device_id)? {
+        match self
+            .device_list
+            .for_device_type(dev_io_req.device_id)
+            .map_err(|e| decode_err!(e))?
+        {
             DeviceType::Smartcard => {
-                let req = DeviceControlRequest::<ScardIoCtlCode>::decode(dev_io_req, src)?;
-                let call = ScardCall::decode(req.io_control_code, src)?;
+                let req =
+                    DeviceControlRequest::<ScardIoCtlCode>::decode(dev_io_req, src).map_err(|e| decode_err!(e))?;
+                let call = ScardCall::decode(req.io_control_code, src).map_err(|e| decode_err!(e))?;
 
                 debug!(?req);
                 debug!(?req.io_control_code, ?call);
@@ -161,7 +166,7 @@ impl Rdpdr {
                 Ok(Vec::new())
             }
             DeviceType::Filesystem => {
-                let req = ServerDriveIoRequest::decode(dev_io_req, src)?;
+                let req = ServerDriveIoRequest::decode(dev_io_req, src).map_err(|e| decode_err!(e))?;
 
                 debug!(?req);
 
@@ -187,7 +192,7 @@ impl SvcProcessor for Rdpdr {
 
     fn process(&mut self, src: &[u8]) -> PduResult<Vec<SvcMessage>> {
         let mut src = ReadCursor::new(src);
-        let pdu = decode_cursor::<RdpdrPdu>(&mut src)?;
+        let pdu = decode_cursor::<RdpdrPdu>(&mut src).map_err(|e| decode_err!(e))?;
         debug!("Received {:?}", pdu);
 
         match pdu {
@@ -217,7 +222,7 @@ impl SvcProcessor for Rdpdr {
             | RdpdrPdu::DeviceReadResponse(_)
             | RdpdrPdu::DeviceWriteResponse(_)
             | RdpdrPdu::ClientDriveSetInformationResponse(_)
-            | RdpdrPdu::EmptyResponse => Err(other_err!("Rdpdr", "received unexpected packet")),
+            | RdpdrPdu::EmptyResponse => Err(pdu_other_err!("Rdpdr", "received unexpected packet")),
         }
     }
 }

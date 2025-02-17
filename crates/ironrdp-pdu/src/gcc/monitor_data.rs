@@ -1,7 +1,8 @@
 use bitflags::bitflags;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 
 pub const MONITOR_COUNT_SIZE: usize = 4;
 pub const MONITOR_SIZE: usize = 20;
@@ -20,8 +21,8 @@ impl ClientMonitorData {
     const FIXED_PART_SIZE: usize = 4 /* flags */ + 4 /* count */;
 }
 
-impl PduEncode for ClientMonitorData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientMonitorData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(0); // flags
@@ -43,15 +44,15 @@ impl PduEncode for ClientMonitorData {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientMonitorData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientMonitorData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let _flags = src.read_u32(); // is unused
         let monitor_count = src.read_u32();
 
         if monitor_count > MONITOR_COUNT_MAX as u32 {
-            return Err(invalid_message_err!("nMonitors", "too many monitors"));
+            return Err(invalid_field_err!("nMonitors", "too many monitors"));
         }
 
         let mut monitors = Vec::with_capacity(monitor_count as usize);
@@ -78,8 +79,8 @@ impl Monitor {
     const FIXED_PART_SIZE: usize = 4 /* left */ + 4 /* top */ + 4 /* right */ + 4 /* bottom */ + 4 /* flags */;
 }
 
-impl PduEncode for Monitor {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Monitor {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_i32(self.left);
@@ -100,8 +101,8 @@ impl PduEncode for Monitor {
     }
 }
 
-impl<'de> PduDecode<'de> for Monitor {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Monitor {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let left = src.read_i32();
@@ -109,7 +110,7 @@ impl<'de> PduDecode<'de> for Monitor {
         let right = src.read_i32();
         let bottom = src.read_i32();
         let flags = MonitorFlags::from_bits(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("flags", "invalid monitor flags"))?;
+            .ok_or_else(|| invalid_field_err!("flags", "invalid monitor flags"))?;
 
         Ok(Self {
             left,

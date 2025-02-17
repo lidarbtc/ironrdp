@@ -1,8 +1,8 @@
 [package]
 name = "ironrdp"
-version = "0.5.0"
+version = "0.7.4"
 readme = "README.md"
-description = "A Rust implementation of the Microsoft Remote Desktop Protocol (RDP)"
+description = "A meta crate re-exporting IronRDP crates for convenience"
 edition.workspace = true
 license.workspace = true
 homepage.workspace = true
@@ -16,7 +16,8 @@ doctest = false
 test = false
 
 [features]
-default = ["pdu", "connector", "session"]
+default = ["core", "pdu"]
+core = ["dep:ironrdp-core"]
 pdu = ["dep:ironrdp-pdu"]
 cliprdr = ["dep:ironrdp-cliprdr"]
 connector = ["dep:ironrdp-connector"]
@@ -32,6 +33,7 @@ rdpsnd = ["dep:ironrdp-rdpsnd"]
 displaycontrol = ["dep:ironrdp-displaycontrol"]
 
 [dependencies]
+ironrdp-core = { workspace = true, optional = true }
 ironrdp-pdu = { workspace = true, optional = true }
 ironrdp-cliprdr = { workspace = true, optional = true }
 ironrdp-connector = { workspace = true, optional = true }
@@ -39,7 +41,7 @@ ironrdp-acceptor = { workspace = true, optional = true }
 ironrdp-session = { workspace = true, optional = true }
 ironrdp-graphics = { workspace = true, optional = true }
 ironrdp-input = { workspace = true, optional = true }
-ironrdp-server = { workspace = true, optional = true }
+ironrdp-server = { workspace = true, optional = true, features = ["helper"] }
 ironrdp-svc = { workspace = true, optional = true }
 ironrdp-dvc = { workspace = true, optional = true }
 ironrdp-rdpdr = { workspace = true, optional = true }
@@ -48,20 +50,18 @@ ironrdp-displaycontrol = { workspace = true, optional = true }
 
 [dev-dependencies]
 ironrdp-blocking.workspace = true
-ironrdp-server.workspace = true
 ironrdp-cliprdr-native.workspace = true
-ironrdp-tls.workspace = true
 anyhow = "1"
 async-trait = "0.1"
-rustls-pemfile = "2.1"
-bmp = "0.5"
+image = { version = "0.25.5", default-features = false, features = ["png"] }
 pico-args = "0.5"
 x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+sspi = { workspace = true, features = ["network_client"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tokio = { version = "1.39", features = ["full"] }
 tokio-rustls = "0.26"
 rand = "0.8"
+opus = "0.3"
 
 [package.metadata.docs.rs]
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
@@ -70,11 +70,12 @@ all-features = true
 [[example]]
 name = "screenshot"
 doc-scrape-examples = true
+required-features = ["session", "connector", "graphics"]
 
 [[example]]
 name = "server"
 doc-scrape-examples = true
+required-features = ["cliprdr", "connector", "rdpsnd", "server"]
 
 [lints]
 workspace = true
-

@@ -14,6 +14,7 @@ use ironrdp_cliprdr::pdu::{
 use thiserror::Error;
 use tracing::error;
 use windows::core::{s, Error};
+pub use windows::Win32::Foundation::HWND;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::DataExchange::{AddClipboardFormatListener, RemoveClipboardFormatListener};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
@@ -24,8 +25,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use self::clipboard_impl::{clipboard_subproc, WinClipboardImpl};
 use self::cliprdr_backend::WinCliprdrBackend;
-
-pub use windows::Win32::Foundation::HWND;
 
 const BACKEND_CHANNEL_SIZE: usize = 8;
 const WM_CLIPRDR_BACKEND_EVENT: u32 = WM_USER;
@@ -111,7 +110,7 @@ pub struct WinClipboard {
     /// ```
     ///
     /// Therefore this type should be non-Send and non-Sync to prevent incorrect use.
-    _thread_marker: std::marker::PhantomData<*const ()>,
+    _thread_marker: core::marker::PhantomData<*const ()>,
 }
 
 impl WinClipboard {

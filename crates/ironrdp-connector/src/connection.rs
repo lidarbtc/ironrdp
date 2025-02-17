@@ -1,15 +1,16 @@
-use std::borrow::Cow;
-use std::mem;
-use std::net::SocketAddr;
-
-use ironrdp_pdu::rdp::client_info::TimezoneInfo;
-use ironrdp_pdu::write_buf::WriteBuf;
-use ironrdp_pdu::{decode, encode_vec, gcc, mcs, nego, rdp, PduEncode, PduHint};
+use core::mem;
+use ironrdp_core::{decode, encode_vec, Encode, WriteBuf};
+use ironrdp_pdu::rdp::client_info::{OptionalSystemTime, TimezoneInfo};
+use ironrdp_pdu::x224::X224;
+use ironrdp_pdu::{gcc, mcs, nego, rdp, PduHint};
 use ironrdp_svc::{StaticChannelSet, StaticVirtualChannel, SvcClientProcessor};
+use std::borrow::Cow;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 use crate::channel_connection::{ChannelConnectionSequence, ChannelConnectionState};
 use crate::connection_activation::{ConnectionActivationSequence, ConnectionActivationState};
-use crate::license_exchange::LicenseExchangeSequence;
+use crate::license_exchange::{LicenseExchangeSequence, NoopLicenseCache};
 use crate::{
     encode_x224_packet, Config, ConnectorError, ConnectorErrorExt as _, ConnectorResult, DesktopSize, Sequence, State,
     Written,
@@ -250,16 +251,20 @@ impl Sequence for ClientConnector {
                 }
 
                 let connection_request = nego::ConnectionRequest {
-                    nego_data: Some(nego::NegoRequestData::cookie(
-                        self.config.credentials.username().to_owned(),
-                    )),
+                    nego_data: self.config.request_data.clone().or_else(|| {
+                        self.config
+                            .credentials
+                            .username()
+                            .map(|username| nego::NegoRequestData::cookie(username.to_owned()))
+                    }),
                     flags: nego::RequestFlags::empty(),
                     protocol: security_protocol,
                 };
 
                 debug!(message = ?connection_request, "Send");
 
-                let written = ironrdp_pdu::encode_buf(&connection_request, output).map_err(ConnectorError::pdu)?;
+                let written =
+                    ironrdp_core::encode_buf(&X224(connection_request), output).map_err(ConnectorError::encode)?;
 
                 (
                     Written::from_size(written)?,
@@ -269,7 +274,9 @@ impl Sequence for ClientConnector {
                 )
             }
             ClientConnectorState::ConnectionInitiationWaitConfirm { requested_protocol } => {
-                let connection_confirm = decode::<nego::ConnectionConfirm>(input).map_err(ConnectorError::pdu)?;
+                let connection_confirm = decode::<X224<nego::ConnectionConfirm>>(input)
+                    .map_err(ConnectorError::decode)
+                    .map(|p| p.0)?;
 
                 debug!(message = ?connection_confirm, "Received");
 
@@ -339,9 +346,11 @@ impl Sequence for ClientConnector {
                 )
             }
             ClientConnectorState::BasicSettingsExchangeWaitResponse { connect_initial } => {
-                let x224_payload = decode::<crate::x224::X224Data<'_>>(input).map_err(ConnectorError::pdu)?;
+                let x224_payload = decode::<X224<crate::x224::X224Data<'_>>>(input)
+                    .map_err(ConnectorError::decode)
+                    .map(|p| p.0)?;
                 let connect_response =
-                    decode::<mcs::ConnectResponse>(x224_payload.data.as_ref()).map_err(ConnectorError::pdu)?;
+                    decode::<mcs::ConnectResponse>(x224_payload.data.as_ref()).map_err(ConnectorError::decode)?;
 
                 debug!(message = ?connect_response, "Received");
 
@@ -470,8 +479,13 @@ impl Sequence for ClientConnector {
                     user_channel_id,
                     license_exchange: LicenseExchangeSequence::new(
                         io_channel_id,
-                        self.config.credentials.username().to_owned(),
+                        self.config.credentials.username().unwrap_or("").to_owned(),
                         self.config.domain.clone(),
+                        self.config.hardware_id.unwrap_or_default(),
+                        self.config
+                            .license_cache
+                            .clone()
+                            .unwrap_or_else(|| Arc::new(NoopLicenseCache)),
                     ),
                 },
             ),
@@ -582,13 +596,13 @@ impl Sequence for ClientConnector {
     }
 }
 
-pub fn encode_send_data_request<T: PduEncode>(
+pub fn encode_send_data_request<T: Encode>(
     initiator_id: u16,
     channel_id: u16,
     user_msg: &T,
     buf: &mut WriteBuf,
 ) -> ConnectorResult<usize> {
-    let user_data = encode_vec(user_msg).map_err(ConnectorError::pdu)?;
+    let user_data = encode_vec(user_msg).map_err(ConnectorError::encode)?;
 
     let pdu = mcs::SendDataRequest {
         initiator_id,
@@ -596,7 +610,7 @@ pub fn encode_send_data_request<T: PduEncode>(
         user_data: Cow::Owned(user_data),
     };
 
-    let written = ironrdp_pdu::encode_buf(&pdu, buf).map_err(ConnectorError::pdu)?;
+    let written = ironrdp_core::encode_buf(&X224(pdu), buf).map_err(ConnectorError::encode)?;
 
     Ok(written)
 }
@@ -729,7 +743,7 @@ fn create_client_info_pdu(config: &Config, routing_addr: &SocketAddr) -> rdp::Cl
 
     let client_info = ClientInfo {
         credentials: Credentials {
-            username: config.credentials.username().to_owned(),
+            username: config.credentials.username().unwrap_or("").to_owned(),
             password: config.credentials.secret().to_owned(),
             domain: config.domain.clone(),
         },
@@ -749,10 +763,10 @@ fn create_client_info_pdu(config: &Config, routing_addr: &SocketAddr) -> rdp::Cl
                 .timezone(TimezoneInfo {
                     bias: 0,
                     standard_name: String::new(),
-                    standard_date: None,
+                    standard_date: OptionalSystemTime(None),
                     standard_bias: 0,
                     daylight_name: String::new(),
-                    daylight_date: None,
+                    daylight_date: OptionalSystemTime(None),
                     daylight_bias: 0,
                 })
                 .session_id(0)

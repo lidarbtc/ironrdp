@@ -3,14 +3,15 @@ pub mod ffi {
 
     use ironrdp::pdu::geometry::Rectangle;
 
-    use crate::{error::ffi::IronRdpError, utils::ffi::VecU8};
+    use crate::error::ffi::IronRdpError;
+    use crate::utils::ffi::VecU8;
 
     #[diplomat::opaque]
-    pub struct WriteBuf(pub ironrdp::pdu::write_buf::WriteBuf);
+    pub struct WriteBuf(pub ironrdp_core::WriteBuf);
 
     impl WriteBuf {
         pub fn new() -> Box<WriteBuf> {
-            Box::new(WriteBuf(ironrdp::pdu::write_buf::WriteBuf::new()))
+            Box::new(WriteBuf(ironrdp_core::WriteBuf::new()))
         }
 
         pub fn clear(&mut self) {

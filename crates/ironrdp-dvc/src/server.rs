@@ -1,18 +1,18 @@
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::fmt;
+
+use ironrdp_core::{cast_length, impl_as_any, invalid_field_err, Decode as _, DecodeResult, ReadCursor};
+use ironrdp_pdu::{self as pdu, decode_err, encode_err, pdu_other_err};
+use ironrdp_svc::{ChannelFlags, CompressionCondition, SvcMessage, SvcProcessor, SvcServerProcessor};
+use pdu::gcc::ChannelName;
+use pdu::PduResult;
+use slab::Slab;
+
 use crate::pdu::{
     CapabilitiesRequestPdu, CapsVersion, CreateRequestPdu, CreationStatus, DrdynvcClientPdu, DrdynvcServerPdu,
 };
 use crate::{encode_dvc_messages, CompleteData, DvcProcessor};
-use alloc::boxed::Box;
-use alloc::vec::Vec;
-use core::fmt;
-use ironrdp_pdu as pdu;
-use ironrdp_svc::{impl_as_any, ChannelFlags, CompressionCondition, SvcMessage, SvcProcessor, SvcServerProcessor};
-use pdu::cursor::ReadCursor;
-use pdu::gcc::ChannelName;
-use pdu::PduDecode as _;
-use pdu::PduResult;
-use pdu::{cast_length, custom_err, invalid_message_err};
-use slab::Slab;
 
 pub trait DvcServerProcessor: DvcProcessor {}
 
@@ -84,11 +84,11 @@ impl DrdynvcServer {
         self
     }
 
-    fn channel_by_id(&mut self, id: u32) -> PduResult<&mut DynamicChannel> {
+    fn channel_by_id(&mut self, id: u32) -> DecodeResult<&mut DynamicChannel> {
         let id = cast_length!("DRDYNVC", "", id)?;
         self.dynamic_channels
             .get_mut(id)
-            .ok_or_else(|| invalid_message_err!("DRDYNVC", "", "invalid channel id"))
+            .ok_or_else(|| invalid_field_err!("DRDYNVC", "", "invalid channel id"))
     }
 }
 
@@ -117,7 +117,7 @@ impl SvcProcessor for DrdynvcServer {
     }
 
     fn process(&mut self, payload: &[u8]) -> PduResult<Vec<SvcMessage>> {
-        let pdu = decode_dvc_message(payload)?;
+        let pdu = decode_dvc_message(payload).map_err(|e| decode_err!(e))?;
         let mut resp = Vec::new();
 
         match pdu {
@@ -128,7 +128,8 @@ impl SvcProcessor for DrdynvcServer {
                         continue;
                     }
                     let req = DrdynvcServerPdu::Create(CreateRequestPdu::new(
-                        id.try_into().map_err(|e| custom_err!("invalid channel id", e))?,
+                        id.try_into()
+                            .map_err(|e| pdu_other_err!("invalid channel id", source: e))?,
                         c.processor.channel_name().into(),
                     ));
                     c.state = ChannelState::Creation;
@@ -138,9 +139,9 @@ impl SvcProcessor for DrdynvcServer {
             DrdynvcClientPdu::Create(create_resp) => {
                 debug!("Got DVC Create Response PDU: {create_resp:?}");
                 let id = create_resp.channel_id;
-                let c = self.channel_by_id(id)?;
+                let c = self.channel_by_id(id).map_err(|e| decode_err!(e))?;
                 if c.state != ChannelState::Creation {
-                    return Err(invalid_message_err!("DRDYNVC", "", "invalid channel state"));
+                    return Err(pdu_other_err!("invalid channel state"));
                 }
                 if create_resp.creation_status != CreationStatus::OK {
                     c.state = ChannelState::CreationFailed(create_resp.creation_status.into());
@@ -148,25 +149,29 @@ impl SvcProcessor for DrdynvcServer {
                 }
                 c.state = ChannelState::Opened;
                 let msg = c.processor.start(create_resp.channel_id)?;
-                resp.extend(encode_dvc_messages(id, msg, ChannelFlags::SHOW_PROTOCOL)?);
+                resp.extend(encode_dvc_messages(id, msg, ChannelFlags::SHOW_PROTOCOL).map_err(|e| encode_err!(e))?);
             }
             DrdynvcClientPdu::Close(close_resp) => {
                 debug!("Got DVC Close Response PDU: {close_resp:?}");
-                let c = self.channel_by_id(close_resp.channel_id)?;
+                let c = self.channel_by_id(close_resp.channel_id).map_err(|e| decode_err!(e))?;
                 if c.state != ChannelState::Opened {
-                    return Err(invalid_message_err!("DRDYNVC", "", "invalid channel state"));
+                    return Err(pdu_other_err!("invalid channel state"));
                 }
                 c.state = ChannelState::Closed;
             }
             DrdynvcClientPdu::Data(data) => {
                 let channel_id = data.channel_id();
-                let c = self.channel_by_id(channel_id)?;
+                let c = self.channel_by_id(channel_id).map_err(|e| decode_err!(e))?;
                 if c.state != ChannelState::Opened {
-                    return Err(invalid_message_err!("DRDYNVC", "", "invalid channel state"));
+                    debug!(?channel_id, ?c.state, "Invalid channel state");
+                    return Err(pdu_other_err!("invalid channel state"));
                 }
-                if let Some(complete) = c.complete_data.process_data(data)? {
+                if let Some(complete) = c.complete_data.process_data(data).map_err(|e| decode_err!(e))? {
                     let msg = c.processor.process(channel_id, &complete)?;
-                    resp.extend(encode_dvc_messages(channel_id, msg, ChannelFlags::SHOW_PROTOCOL)?);
+                    resp.extend(
+                        encode_dvc_messages(channel_id, msg, ChannelFlags::SHOW_PROTOCOL)
+                            .map_err(|e| encode_err!(e))?,
+                    );
                 }
             }
         }
@@ -177,7 +182,7 @@ impl SvcProcessor for DrdynvcServer {
 
 impl SvcServerProcessor for DrdynvcServer {}
 
-fn decode_dvc_message(user_data: &[u8]) -> PduResult<DrdynvcClientPdu> {
+fn decode_dvc_message(user_data: &[u8]) -> DecodeResult<DrdynvcClientPdu> {
     DrdynvcClientPdu::decode(&mut ReadCursor::new(user_data))
 }
 

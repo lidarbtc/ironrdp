@@ -1,12 +1,13 @@
 use std::io;
 
 use bitflags::bitflags;
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 use thiserror::Error;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
 
 const CLIENT_ENCRYPTION_METHODS_SIZE: usize = 4;
 const CLIENT_EXT_ENCRYPTION_METHODS_SIZE: usize = 4;
@@ -37,8 +38,8 @@ impl ClientSecurityData {
     }
 }
 
-impl PduEncode for ClientSecurityData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientSecurityData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(self.encryption_methods.bits());
@@ -56,12 +57,12 @@ impl PduEncode for ClientSecurityData {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientSecurityData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientSecurityData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let encryption_methods = EncryptionMethod::from_bits(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("encryptionMethods", "invalid encryption methods"))?;
+            .ok_or_else(|| invalid_field_err!("encryptionMethods", "invalid encryption methods"))?;
         let ext_encryption_methods = src.read_u32();
 
         Ok(Self {
@@ -94,8 +95,8 @@ impl ServerSecurityData {
     }
 }
 
-impl PduEncode for ServerSecurityData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerSecurityData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(self.encryption_method.bits());
@@ -103,7 +104,7 @@ impl PduEncode for ServerSecurityData {
 
         if self.encryption_method.is_empty() && self.encryption_level == EncryptionLevel::None {
             if self.server_random.is_some() || !self.server_cert.is_empty() {
-                Err(invalid_message_err!("serverRandom", "An encryption method and encryption level is none, but the server random or certificate is not empty"))
+                Err(invalid_field_err!("serverRandom", "An encryption method and encryption level is none, but the server random or certificate is not empty"))
             } else {
                 Ok(())
             }
@@ -142,14 +143,14 @@ impl PduEncode for ServerSecurityData {
     }
 }
 
-impl<'de> PduDecode<'de> for ServerSecurityData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ServerSecurityData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let encryption_method = EncryptionMethod::from_bits(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("encryptionMethod", "invalid encryption method"))?;
+            .ok_or_else(|| invalid_field_err!("encryptionMethod", "invalid encryption method"))?;
         let encryption_level = EncryptionLevel::from_u32(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("encryptionLevel", "invalid encryption level"))?;
+            .ok_or_else(|| invalid_field_err!("encryptionLevel", "invalid encryption level"))?;
 
         let (server_random, server_cert) = if encryption_method.is_empty() && encryption_level == EncryptionLevel::None
         {
@@ -159,16 +160,13 @@ impl<'de> PduDecode<'de> for ServerSecurityData {
 
             let server_random_len: usize = cast_length!("serverRandomLen", src.read_u32())?;
             if server_random_len != SERVER_RANDOM_LEN {
-                return Err(invalid_message_err!("serverRandomLen", "Invalid server random length"));
+                return Err(invalid_field_err!("serverRandomLen", "Invalid server random length"));
             }
 
             let server_cert_len = cast_length!("serverCertLen", src.read_u32())?;
 
             if server_cert_len > MAX_SERVER_CERT_LEN {
-                return Err(invalid_message_err!(
-                    "serverCetLen",
-                    "Invalid server certificate length"
-                ));
+                return Err(invalid_field_err!("serverCetLen", "Invalid server certificate length"));
             }
 
             ensure_size!(in: src, size: SERVER_RANDOM_LEN);

@@ -1,18 +1,16 @@
 use std::sync::Arc;
 
+use ironrdp_core::{decode_cursor, DecodeErrorKind, ReadCursor, WriteBuf};
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_graphics::pointer::{DecodedPointer, PointerBitmapTarget};
 use ironrdp_graphics::rdp6::BitmapStreamDecoder;
 use ironrdp_graphics::rle::RlePixelFormat;
 use ironrdp_pdu::codecs::rfx::FrameAcknowledgePdu;
-use ironrdp_pdu::cursor::ReadCursor;
 use ironrdp_pdu::fast_path::{FastPathHeader, FastPathUpdate, FastPathUpdatePdu, Fragmentation};
 use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
 use ironrdp_pdu::pointer::PointerUpdateData;
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
 use ironrdp_pdu::surface_commands::{FrameAction, FrameMarkerPdu, SurfaceCommand};
-use ironrdp_pdu::write_buf::WriteBuf;
-use ironrdp_pdu::{decode_cursor, PduErrorKind};
 
 use crate::image::DecodedImage;
 use crate::pointer::PointerCache;
@@ -63,10 +61,10 @@ impl Processor {
 
         let mut input = ReadCursor::new(input);
 
-        let header = decode_cursor::<FastPathHeader>(&mut input).map_err(SessionError::pdu)?;
+        let header = decode_cursor::<FastPathHeader>(&mut input).map_err(SessionError::decode)?;
         debug!(fast_path_header = ?header, "Received Fast-Path packet");
 
-        let update_pdu = decode_cursor::<FastPathUpdatePdu<'_>>(&mut input).map_err(SessionError::pdu)?;
+        let update_pdu = decode_cursor::<FastPathUpdatePdu<'_>>(&mut input).map_err(SessionError::decode)?;
         trace!(fast_path_update_fragmentation = ?update_pdu.fragmentation);
 
         let processed_complete_data = self
@@ -294,7 +292,7 @@ impl Processor {
                 };
             }
             Err(e) => {
-                if let PduErrorKind::InvalidMessage { field, reason } = e.kind {
+                if let DecodeErrorKind::InvalidField { field, reason } = e.kind {
                     warn!(field, reason, "Received invalid Fast-Path update");
                     processor_updates.push(UpdateKind::None);
                 } else {
@@ -433,9 +431,7 @@ impl CompleteData {
             Fragmentation::Last => {
                 self.append_data(data);
 
-                let complete_data = self.fragmented_data.take().unwrap();
-
-                Some(complete_data)
+                self.fragmented_data.take()
             }
         }
     }

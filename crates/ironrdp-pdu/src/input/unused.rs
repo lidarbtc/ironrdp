@@ -1,7 +1,4 @@
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    PduDecode, PduEncode, PduResult,
-};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnusedPdu;
@@ -12,8 +9,8 @@ impl UnusedPdu {
     const FIXED_PART_SIZE: usize = 6 /* padding */;
 }
 
-impl PduEncode for UnusedPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for UnusedPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         write_padding!(dst, 6);
@@ -29,8 +26,8 @@ impl PduEncode for UnusedPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for UnusedPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for UnusedPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         read_padding!(src, 6);

@@ -1,7 +1,8 @@
 use ironrdp_connector::{ConnectorError, ConnectorErrorExt, ConnectorResult, Sequence, State, Written};
-use ironrdp_pdu as pdu;
+use ironrdp_core::WriteBuf;
+use ironrdp_pdu::x224::X224;
+use ironrdp_pdu::{self as pdu};
 use pdu::rdp;
-use pdu::write_buf::WriteBuf;
 
 use crate::util::{self, wrap_share_data};
 
@@ -78,7 +79,7 @@ impl Sequence for FinalizationSequence {
     }
 
     fn step(&mut self, input: &[u8], output: &mut WriteBuf) -> ConnectorResult<Written> {
-        let (written, next_state) = match std::mem::take(&mut self.state) {
+        let (written, next_state) = match core::mem::take(&mut self.state) {
             FinalizationState::WaitSynchronize => {
                 let synchronize = decode_share_control(input);
 
@@ -219,9 +220,11 @@ fn create_font_map() -> rdp::headers::ShareDataPdu {
 }
 
 fn decode_share_control(input: &[u8]) -> ConnectorResult<rdp::headers::ShareControlHeader> {
-    let data_request = pdu::decode::<pdu::mcs::SendDataRequest<'_>>(input).map_err(ConnectorError::pdu)?;
-    let share_control = pdu::decode::<rdp::headers::ShareControlHeader>(data_request.user_data.as_ref())
-        .map_err(ConnectorError::pdu)?;
+    let data_request = ironrdp_core::decode::<X224<pdu::mcs::SendDataRequest<'_>>>(input)
+        .map_err(ConnectorError::decode)
+        .map(|p| p.0)?;
+    let share_control = ironrdp_core::decode::<rdp::headers::ShareControlHeader>(data_request.user_data.as_ref())
+        .map_err(ConnectorError::decode)?;
     Ok(share_control)
 }
 

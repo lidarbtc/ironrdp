@@ -1,6 +1,6 @@
 [package]
 name = "ironrdp-rdpsnd"
-version = "0.1.0"
+version = "0.3.0"
 readme = "README.md"
 description = "RDPSND static channel for audio output implemented as described in MS-RDPEA"
 edition.workspace = true
@@ -23,8 +23,8 @@ std = []
 bitflags.workspace = true
 tracing.workspace = true
 ironrdp-svc.workspace = true
+ironrdp-core = { workspace = true, features = ["alloc"] }
 ironrdp-pdu = { workspace = true, features = ["alloc"] }
 
 [lints]
 workspace = true
-

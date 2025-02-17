@@ -1,6 +1,6 @@
 [package]
 name = "ironrdp-cliprdr-format"
-version = "0.1.0"
+version = "0.1.2"
 readme = "README.md"
 description = "CLIPRDR format conversion library"
 edition.workspace = true
@@ -17,8 +17,8 @@ doctest = false
 test = false
 
 [dependencies]
-ironrdp-pdu.workspace = true
-thiserror.workspace = true
+ironrdp-core.workspace = true
+thiserror.workspace = true # FIXME: handwrite the Error trait implementations.
 png = "0.17"
 
 [lints]

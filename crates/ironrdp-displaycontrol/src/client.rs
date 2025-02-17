@@ -1,11 +1,11 @@
-use crate::{
-    pdu::{DisplayControlCapabilities, DisplayControlMonitorLayout, DisplayControlPdu},
-    CHANNEL_NAME,
-};
+use ironrdp_core::{impl_as_any, Decode, EncodeResult, ReadCursor};
 use ironrdp_dvc::{encode_dvc_messages, DvcClientProcessor, DvcMessage, DvcProcessor};
-use ironrdp_pdu::{cursor::ReadCursor, PduDecode, PduResult};
-use ironrdp_svc::{impl_as_any, ChannelFlags, SvcMessage};
+use ironrdp_pdu::{decode_err, PduResult};
+use ironrdp_svc::{ChannelFlags, SvcMessage};
 use tracing::debug;
+
+use crate::pdu::{DisplayControlCapabilities, DisplayControlMonitorLayout, DisplayControlPdu};
+use crate::CHANNEL_NAME;
 
 /// A client for the Display Control Virtual Channel.
 pub struct DisplayControlClient {
@@ -55,7 +55,7 @@ impl DisplayControlClient {
         height: u32,
         scale_factor: Option<u32>,
         physical_dims: Option<(u32, u32)>,
-    ) -> PduResult<Vec<SvcMessage>> {
+    ) -> EncodeResult<Vec<SvcMessage>> {
         // TODO: prevent resolution with values greater than max monitor area received in caps.
         let pdu: DisplayControlPdu =
             DisplayControlMonitorLayout::new_single_primary_monitor(width, height, scale_factor, physical_dims)?.into();
@@ -76,7 +76,7 @@ impl DvcProcessor for DisplayControlClient {
     }
 
     fn process(&mut self, _channel_id: u32, payload: &[u8]) -> PduResult<Vec<DvcMessage>> {
-        let caps = DisplayControlCapabilities::decode(&mut ReadCursor::new(payload))?;
+        let caps = DisplayControlCapabilities::decode(&mut ReadCursor::new(payload)).map_err(|e| decode_err!(e))?;
         debug!("Received {:?}", caps);
         self.ready = true;
         (self.on_capabilities_received)(caps)

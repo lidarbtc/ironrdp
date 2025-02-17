@@ -1,9 +1,12 @@
 use bitflags::bitflags;
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive as _, ToPrimitive as _};
 
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{gcc, PduDecode, PduEncode, PduResult};
+use crate::gcc;
 
 const SYNCHRONIZE_PDU_SIZE: usize = 2 + 2;
 const CONTROL_PDU_SIZE: usize = 2 + 2 + 4;
@@ -22,8 +25,8 @@ impl SynchronizePdu {
     const FIXED_PART_SIZE: usize = SYNCHRONIZE_PDU_SIZE;
 }
 
-impl PduEncode for SynchronizePdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for SynchronizePdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(SYNCHRONIZE_MESSAGE_TYPE);
@@ -41,13 +44,13 @@ impl PduEncode for SynchronizePdu {
     }
 }
 
-impl<'de> PduDecode<'de> for SynchronizePdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for SynchronizePdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let message_type = src.read_u16();
         if message_type != SYNCHRONIZE_MESSAGE_TYPE {
-            return Err(invalid_message_err!("messageType", "invalid message type"));
+            return Err(invalid_field_err!("messageType", "invalid message type"));
         }
 
         let target_user_id = src.read_u16();
@@ -69,8 +72,8 @@ impl ControlPdu {
     const FIXED_PART_SIZE: usize = CONTROL_PDU_SIZE;
 }
 
-impl PduEncode for ControlPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ControlPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.action.to_u16().unwrap());
@@ -89,12 +92,12 @@ impl PduEncode for ControlPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for ControlPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ControlPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let action = ControlAction::from_u16(src.read_u16())
-            .ok_or_else(|| invalid_message_err!("action", "invalid control action"))?;
+            .ok_or_else(|| invalid_field_err!("action", "invalid control action"))?;
         let grant_id = src.read_u16();
         let control_id = src.read_u32();
 
@@ -135,8 +138,8 @@ impl FontPdu {
     const FIXED_PART_SIZE: usize = FONT_PDU_SIZE;
 }
 
-impl PduEncode for FontPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FontPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.number);
@@ -156,14 +159,14 @@ impl PduEncode for FontPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for FontPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FontPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let number = src.read_u16();
         let total_number = src.read_u16();
         let flags = SequenceFlags::from_bits(src.read_u16())
-            .ok_or_else(|| invalid_message_err!("flags", "invalid sequence flags"))?;
+            .ok_or_else(|| invalid_field_err!("flags", "invalid sequence flags"))?;
         let entry_size = src.read_u16();
 
         Ok(Self {
@@ -186,8 +189,8 @@ impl MonitorLayoutPdu {
     const FIXED_PART_SIZE: usize = 4 /* nMonitors */;
 }
 
-impl PduEncode for MonitorLayoutPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for MonitorLayoutPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(cast_length!("nMonitors", self.monitors.len())?);
@@ -208,13 +211,13 @@ impl PduEncode for MonitorLayoutPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for MonitorLayoutPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for MonitorLayoutPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let monitor_count = src.read_u32();
         if monitor_count > MAX_MONITOR_COUNT {
-            return Err(invalid_message_err!("nMonitors", "invalid monitor count"));
+            return Err(invalid_field_err!("nMonitors", "invalid monitor count"));
         }
 
         let mut monitors = Vec::with_capacity(monitor_count as usize);

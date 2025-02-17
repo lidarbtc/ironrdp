@@ -1,5 +1,7 @@
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 
 // Represents `TS_POINT16` described in [MS-RDPBCGR] 2.2.9.1.1.4.1
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,8 +15,8 @@ impl Point16 {
     const FIXED_PART_SIZE: usize = 2 /* x */ + 2 /* y */;
 }
 
-impl PduEncode for Point16 {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Point16 {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(self.x);
@@ -31,8 +33,8 @@ impl PduEncode for Point16 {
     }
 }
 
-impl PduDecode<'_> for Point16 {
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+impl Decode<'_> for Point16 {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let x = src.read_u16();
@@ -61,26 +63,28 @@ impl ColorPointerAttribute<'_> {
     const NAME: &'static str = "TS_COLORPOINTERATTRIBUTE";
     const FIXED_PART_SIZE: usize =
         2 /* cacheIdx */ + 2 /* width */ + 2 /* height */ + 2 /* lenAnd */ + 2 /* lenOr */ + Point16::FIXED_PART_SIZE;
+}
 
-    fn check_masks_alignment(and_mask: &[u8], xor_mask: &[u8], pointer_height: u16, large_ptr: bool) -> PduResult<()> {
+macro_rules! check_masks_alignment {
+    ($and_mask:expr, $xor_mask:expr, $pointer_height:expr, $large_ptr:expr) => {{
         const AND_MASK_SIZE_FIELD: &str = "lengthAndMask";
         const XOR_MASK_SIZE_FIELD: &str = "lengthXorMask";
 
         let check_mask = |mask: &[u8], field: &'static str| {
-            if pointer_height == 0 {
-                return Err(invalid_message_err!(field, "pointer height cannot be zero"));
+            if $pointer_height == 0 {
+                return Err(invalid_field_err!(field, "pointer height cannot be zero"));
             }
-            if large_ptr && (mask.len() > u32::MAX as usize) {
-                return Err(invalid_message_err!(field, "pointer mask is too big for u32 size"));
+            if $large_ptr && (mask.len() > u32::MAX as usize) {
+                return Err(invalid_field_err!(field, "pointer mask is too big for u32 size"));
             }
-            if !large_ptr && (mask.len() > u16::MAX as usize) {
-                return Err(invalid_message_err!(field, "pointer mask is too big for u16 size"));
+            if !$large_ptr && (mask.len() > u16::MAX as usize) {
+                return Err(invalid_field_err!(field, "pointer mask is too big for u16 size"));
             }
-            if (mask.len() % pointer_height as usize) != 0 {
-                return Err(invalid_message_err!(field, "pointer mask have incomplete scanlines"));
+            if (mask.len() % $pointer_height as usize) != 0 {
+                return Err(invalid_field_err!(field, "pointer mask have incomplete scanlines"));
             }
-            if (mask.len() / pointer_height as usize) % 2 != 0 {
-                return Err(invalid_message_err!(
+            if (mask.len() / $pointer_height as usize) % 2 != 0 {
+                return Err(invalid_field_err!(
                     field,
                     "pointer mask scanlines should be aligned to 16 bits"
                 ));
@@ -88,16 +92,16 @@ impl ColorPointerAttribute<'_> {
             Ok(())
         };
 
-        check_mask(and_mask, AND_MASK_SIZE_FIELD)?;
-        check_mask(xor_mask, XOR_MASK_SIZE_FIELD)
-    }
+        check_mask($and_mask, AND_MASK_SIZE_FIELD)?;
+        check_mask($xor_mask, XOR_MASK_SIZE_FIELD)
+    }};
 }
 
-impl PduEncode for ColorPointerAttribute<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ColorPointerAttribute<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
-        Self::check_masks_alignment(self.and_mask, self.xor_mask, self.height, false)?;
+        check_masks_alignment!(self.and_mask, self.xor_mask, self.height, false)?;
 
         dst.write_u16(self.cache_index);
         self.hot_spot.encode(dst)?;
@@ -123,8 +127,8 @@ impl PduEncode for ColorPointerAttribute<'_> {
     }
 }
 
-impl<'a> PduDecode<'a> for ColorPointerAttribute<'a> {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for ColorPointerAttribute<'a> {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let cache_index = src.read_u16();
@@ -141,7 +145,7 @@ impl<'a> PduDecode<'a> for ColorPointerAttribute<'a> {
         let xor_mask = src.read_slice(length_xor_mask as usize);
         let and_mask = src.read_slice(length_and_mask as usize);
 
-        Self::check_masks_alignment(and_mask, xor_mask, height, false)?;
+        check_masks_alignment!(and_mask, xor_mask, height, false)?;
 
         Ok(Self {
             cache_index,
@@ -166,8 +170,8 @@ impl PointerAttribute<'_> {
     const FIXED_PART_SIZE: usize = 2 /* xorBpp */;
 }
 
-impl PduEncode for PointerAttribute<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for PointerAttribute<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(self.xor_bpp);
@@ -185,8 +189,8 @@ impl PduEncode for PointerAttribute<'_> {
     }
 }
 
-impl<'a> PduDecode<'a> for PointerAttribute<'a> {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for PointerAttribute<'a> {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let xor_bpp = src.read_u16();
@@ -207,8 +211,8 @@ impl CachedPointerAttribute {
     const FIXED_PART_SIZE: usize = 2 /* cacheIdx */;
 }
 
-impl PduEncode for CachedPointerAttribute {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for CachedPointerAttribute {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(self.cache_index);
@@ -225,8 +229,8 @@ impl PduEncode for CachedPointerAttribute {
     }
 }
 
-impl PduDecode<'_> for CachedPointerAttribute {
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+impl Decode<'_> for CachedPointerAttribute {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let cache_index = src.read_u16();
@@ -254,11 +258,11 @@ impl LargePointerAttribute<'_> {
         4 /* andMaskLen */ + 4 /* xorMaskLen */;
 }
 
-impl PduEncode for LargePointerAttribute<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for LargePointerAttribute<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
-        ColorPointerAttribute::check_masks_alignment(self.and_mask, self.xor_mask, self.height, true)?;
+        check_masks_alignment!(self.and_mask, self.xor_mask, self.height, true)?;
 
         dst.write_u16(self.xor_bpp);
         dst.write_u16(self.cache_index);
@@ -284,8 +288,8 @@ impl PduEncode for LargePointerAttribute<'_> {
     }
 }
 
-impl<'a> PduDecode<'a> for LargePointerAttribute<'a> {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for LargePointerAttribute<'a> {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let xor_bpp = src.read_u16();
@@ -303,7 +307,7 @@ impl<'a> PduDecode<'a> for LargePointerAttribute<'a> {
         let xor_mask = src.read_slice(length_xor_mask);
         let and_mask = src.read_slice(length_and_mask);
 
-        ColorPointerAttribute::check_masks_alignment(and_mask, xor_mask, height, true)?;
+        check_masks_alignment!(and_mask, xor_mask, height, true)?;
 
         Ok(Self {
             xor_bpp,

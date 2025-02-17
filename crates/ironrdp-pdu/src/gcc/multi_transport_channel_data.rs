@@ -1,7 +1,7 @@
 use bitflags::bitflags;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{
+    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiTransportChannelData {
@@ -14,8 +14,8 @@ impl MultiTransportChannelData {
     const FIXED_PART_SIZE: usize = 4 /* flags */;
 }
 
-impl PduEncode for MultiTransportChannelData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for MultiTransportChannelData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.flags.bits());
@@ -32,12 +32,12 @@ impl PduEncode for MultiTransportChannelData {
     }
 }
 
-impl<'de> PduDecode<'de> for MultiTransportChannelData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for MultiTransportChannelData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let flags = MultiTransportFlags::from_bits(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("flags", "invalid multitransport flags"))?;
+            .ok_or_else(|| invalid_field_err!("flags", "invalid multitransport flags"))?;
 
         Ok(Self { flags })
     }

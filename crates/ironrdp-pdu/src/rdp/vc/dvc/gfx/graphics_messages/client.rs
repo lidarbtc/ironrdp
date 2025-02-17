@@ -1,6 +1,9 @@
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
+
 use super::CapabilitySet;
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilitiesAdvertisePdu(pub Vec<CapabilitySet>);
@@ -11,8 +14,8 @@ impl CapabilitiesAdvertisePdu {
     const FIXED_PART_SIZE: usize  = 2 /* Count */;
 }
 
-impl PduEncode for CapabilitiesAdvertisePdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for CapabilitiesAdvertisePdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(cast_length!("Count", self.0.len())?);
@@ -33,8 +36,8 @@ impl PduEncode for CapabilitiesAdvertisePdu {
     }
 }
 
-impl<'a> PduDecode<'a> for CapabilitiesAdvertisePdu {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for CapabilitiesAdvertisePdu {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let capabilities_count = cast_length!("Count", src.read_u16())?;
@@ -62,8 +65,8 @@ impl FrameAcknowledgePdu {
     const FIXED_PART_SIZE: usize = 4 /* QueueDepth */ + 4 /* FrameId */ + 4 /* TotalFramesDecoded */;
 }
 
-impl PduEncode for FrameAcknowledgePdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FrameAcknowledgePdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.queue_depth.to_u32());
@@ -82,8 +85,8 @@ impl PduEncode for FrameAcknowledgePdu {
     }
 }
 
-impl<'a> PduDecode<'a> for FrameAcknowledgePdu {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for FrameAcknowledgePdu {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let queue_depth = QueueDepth::from_u32(src.read_u32());
@@ -109,8 +112,8 @@ impl CacheImportReplyPdu {
     const FIXED_PART_SIZE: usize = 2 /* Count */;
 }
 
-impl PduEncode for CacheImportReplyPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for CacheImportReplyPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(cast_length!("Count", self.cache_slots.len())?);
@@ -131,8 +134,8 @@ impl PduEncode for CacheImportReplyPdu {
     }
 }
 
-impl<'a> PduDecode<'a> for CacheImportReplyPdu {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for CacheImportReplyPdu {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let entries_count = src.read_u16();

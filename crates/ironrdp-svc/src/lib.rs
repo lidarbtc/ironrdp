@@ -1,27 +1,40 @@
 #![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://cdnweb.devolutions.net/images/projects/devolutions/logos/devolutions-icon-shadow.svg")]
+
 // TODO: #![warn(missing_docs)]
 
 extern crate alloc;
 
-// Re-export ironrdp_pdu crate for convenience
-#[rustfmt::skip] // do not re-order this pub use
-pub use ironrdp_pdu as pdu;
-
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use core::any::{Any, TypeId};
+use core::any::TypeId;
 use core::fmt;
+use core::marker::PhantomData;
 use std::borrow::Cow;
-use std::marker::PhantomData;
 
 use bitflags::bitflags;
+use ironrdp_core::{
+    assert_obj_safe, decode_cursor, encode_buf, AsAny, DecodeResult, Encode, EncodeResult, ReadCursor, WriteBuf,
+    WriteCursor,
+};
+use ironrdp_pdu::gcc::ChannelDef;
 use ironrdp_pdu::gcc::{ChannelName, ChannelOptions};
-use ironrdp_pdu::write_buf::WriteBuf;
-use ironrdp_pdu::{assert_obj_safe, mcs, PduResult};
-use pdu::cursor::{ReadCursor, WriteCursor};
-use pdu::gcc::ChannelDef;
-use pdu::rdp::vc::ChannelControlFlags;
-use pdu::{decode_cursor, encode_buf, PduEncode};
+use ironrdp_pdu::rdp::vc::ChannelControlFlags;
+use ironrdp_pdu::x224::X224;
+use ironrdp_pdu::{decode_err, mcs, PduResult};
+
+// Re-export ironrdp_pdu crate for convenience
+#[rustfmt::skip] // Do not re-order this pub use.
+pub use ironrdp_pdu as pdu;
+
+// TODO(#583): Remove once Teleport migrated to the newer item paths.
+#[doc(hidden)]
+#[deprecated(since = "0.1.0", note = "use ironrdp-core")]
+#[rustfmt::skip] // Do not re-order this pub use.
+pub use ironrdp_core::impl_as_any;
+
+// NOTE: We may re-consider moving some types dedicated to SVC out of ironrdp_pdu in some future major version bump.
+// The idea is to reduce the amount of code required when building a static/dynamic channel to a minimum.
 
 /// The integer type representing a static virtual channel ID.
 pub type StaticChannelId = u16;
@@ -54,20 +67,20 @@ impl<P: SvcProcessor> From<SvcProcessorMessages<P>> for Vec<SvcMessage> {
     }
 }
 
-/// Represents a message that, when encoded, forms a complete PDU for a given static virtual channel, sans any [`ChannelPduHeader`].
-/// In other words, this marker should be applied to a message that is ready to be chunkified (have [`ChannelPduHeader`]s added,
+/// Represents a message that, when encoded, forms a complete PDU for a given static virtual channel, sans any Channel PDU Header.
+/// In other words, this marker should be applied to a message that is ready to be chunkified (have channel PDU headers added,
 /// splitting it into chunks if necessary) and wrapped in MCS, x224, and tpkt headers for sending over the wire.
-pub trait SvcPduEncode: PduEncode + Send {}
+pub trait SvcEncode: Encode + Send {}
 
-/// For legacy reasons, we implement [`SvcPduEncode`] for [`Vec<u8>`].
+/// For legacy reasons, we implement [`SvcEncode`] for [`Vec<u8>`].
 // FIXME: legacy code
-impl SvcPduEncode for Vec<u8> {}
+impl SvcEncode for Vec<u8> {}
 
 /// Encodable PDU to be sent over a static virtual channel.
 ///
 /// Additional SVC header flags can be added via [`SvcMessage::with_flags`] method.
 pub struct SvcMessage {
-    pdu: Box<dyn SvcPduEncode>,
+    pdu: Box<dyn SvcEncode>,
     flags: ChannelFlags,
 }
 
@@ -82,7 +95,7 @@ impl SvcMessage {
 
 impl<T> From<T> for SvcMessage
 where
-    T: SvcPduEncode + 'static,
+    T: SvcEncode + 'static,
 {
     fn from(pdu: T) -> Self {
         Self {
@@ -133,14 +146,14 @@ impl StaticVirtualChannel {
     /// Processes a payload received on the virtual channel. Returns a vector of PDUs to be sent back
     /// to the server. If no PDUs are to be sent, an empty vector is returned.
     pub fn process(&mut self, payload: &[u8]) -> PduResult<Vec<SvcMessage>> {
-        if let Some(payload) = self.dechunkify(payload)? {
+        if let Some(payload) = self.dechunkify(payload).map_err(|e| decode_err!(e))? {
             return self.channel_processor.process(&payload);
         }
 
         Ok(Vec::new())
     }
 
-    pub fn chunkify(messages: Vec<SvcMessage>) -> PduResult<Vec<WriteBuf>> {
+    pub fn chunkify(messages: Vec<SvcMessage>) -> EncodeResult<Vec<WriteBuf>> {
         ChunkProcessor::chunkify(messages, CHANNEL_CHUNK_LENGTH)
     }
 
@@ -152,7 +165,7 @@ impl StaticVirtualChannel {
         self.channel_processor.as_any_mut().downcast_mut()
     }
 
-    fn dechunkify(&mut self, payload: &[u8]) -> PduResult<Option<Vec<u8>>> {
+    fn dechunkify(&mut self, payload: &[u8]) -> DecodeResult<Option<Vec<u8>>> {
         self.chunk_processor.dechunkify(payload)
     }
 }
@@ -162,13 +175,13 @@ fn encode_svc_messages(
     channel_id: u16,
     initiator_id: u16,
     client: bool,
-) -> PduResult<Vec<u8>> {
+) -> EncodeResult<Vec<u8>> {
     let mut fully_encoded_responses = WriteBuf::new(); // TODO(perf): reuse this buffer using `clear` and `filled` as appropriate
 
     // For each response PDU, chunkify it and add appropriate static channel headers.
     let chunks = StaticVirtualChannel::chunkify(messages)?;
 
-    // SendData is [`McsPdu`], which is [`x224Pdu`], which is [`PduEncode`]. [`PduEncode`] for [`x224Pdu`]
+    // SendData is [`McsPdu`], which is [`x224Pdu`], which is [`Encode`]. [`Encode`] for [`x224Pdu`]
     // also takes care of adding the Tpkt header, so therefore we can just call `encode_buf` on each of these and
     // we will create a buffer of fully encoded PDUs ready to send to the server.
     //
@@ -183,7 +196,7 @@ fn encode_svc_messages(
                 channel_id,
                 user_data: Cow::Borrowed(chunk.filled()),
             };
-            encode_buf(&pdu, &mut fully_encoded_responses)?;
+            encode_buf(&X224(pdu), &mut fully_encoded_responses)?;
         }
     } else {
         for chunk in chunks {
@@ -192,7 +205,7 @@ fn encode_svc_messages(
                 channel_id,
                 user_data: Cow::Borrowed(chunk.filled()),
             };
-            encode_buf(&pdu, &mut fully_encoded_responses)?;
+            encode_buf(&X224(pdu), &mut fully_encoded_responses)?;
         }
     }
 
@@ -205,7 +218,11 @@ fn encode_svc_messages(
 /// The messages returned here are ready to be sent to the server.
 ///
 /// The caller is responsible for ensuring that the `channel_id` corresponds to the correct channel.
-pub fn client_encode_svc_messages(messages: Vec<SvcMessage>, channel_id: u16, initiator_id: u16) -> PduResult<Vec<u8>> {
+pub fn client_encode_svc_messages(
+    messages: Vec<SvcMessage>,
+    channel_id: u16,
+    initiator_id: u16,
+) -> EncodeResult<Vec<u8>> {
     encode_svc_messages(messages, channel_id, initiator_id, true)
 }
 
@@ -215,7 +232,11 @@ pub fn client_encode_svc_messages(messages: Vec<SvcMessage>, channel_id: u16, in
 /// The messages returned here are ready to be sent to the client.
 ///
 /// The caller is responsible for ensuring that the `channel_id` corresponds to the correct channel.
-pub fn server_encode_svc_messages(messages: Vec<SvcMessage>, channel_id: u16, initiator_id: u16) -> PduResult<Vec<u8>> {
+pub fn server_encode_svc_messages(
+    messages: Vec<SvcMessage>,
+    channel_id: u16,
+    initiator_id: u16,
+) -> EncodeResult<Vec<u8>> {
     encode_svc_messages(messages, channel_id, initiator_id, false)
 }
 
@@ -276,7 +297,7 @@ impl ChunkProcessor {
     /// Takes a vector of PDUs and breaks them into chunks prefixed with a Channel PDU Header (`CHANNEL_PDU_HEADER`).
     ///
     /// Each chunk is at most `max_chunk_len` bytes long (not including the Channel PDU Header).
-    fn chunkify(messages: Vec<SvcMessage>, max_chunk_len: usize) -> PduResult<Vec<WriteBuf>> {
+    fn chunkify(messages: Vec<SvcMessage>, max_chunk_len: usize) -> EncodeResult<Vec<WriteBuf>> {
         let mut results = Vec::new();
         for message in messages {
             results.extend(Self::chunkify_one(message, max_chunk_len)?);
@@ -289,7 +310,7 @@ impl ChunkProcessor {
     /// If the payload is not chunked, returns the payload as-is.
     /// For chunked payloads, returns `Ok(None)` until the last chunk is received, at which point
     /// it returns `Ok(Some(payload))`.
-    fn dechunkify(&mut self, payload: &[u8]) -> PduResult<Option<Vec<u8>>> {
+    fn dechunkify(&mut self, payload: &[u8]) -> DecodeResult<Option<Vec<u8>>> {
         let mut cursor = ReadCursor::new(payload);
         let last = Self::process_header(&mut cursor)?;
 
@@ -299,7 +320,7 @@ impl ChunkProcessor {
         // If this was an unchunked message, or the last in a series of chunks, return the payload
         if last {
             // Take the chunked_pdu buffer and replace it with an empty one
-            return Ok(Some(std::mem::take(&mut self.chunked_pdu)));
+            return Ok(Some(core::mem::take(&mut self.chunked_pdu)));
         }
 
         // This was an intermediate chunk, return None
@@ -307,7 +328,7 @@ impl ChunkProcessor {
     }
 
     /// Returns whether this was the last chunk based on the flags in the channel header.
-    fn process_header(payload: &mut ReadCursor<'_>) -> PduResult<bool> {
+    fn process_header(payload: &mut ReadCursor<'_>) -> DecodeResult<bool> {
         let channel_header: ironrdp_pdu::rdp::vc::ChannelPduHeader = decode_cursor(payload)?;
 
         Ok(channel_header.flags.contains(ChannelControlFlags::FLAG_LAST))
@@ -321,7 +342,7 @@ impl ChunkProcessor {
     /// return 3 chunks, each 1600 bytes long, and the last chunk will be 800 bytes long.
     ///
     /// [[ Channel PDU Header | 1600 bytes of PDU data ] [ Channel PDU Header | 1600 bytes of PDU data ] [ Channel PDU Header | 800 bytes of PDU data ]]
-    fn chunkify_one(message: SvcMessage, max_chunk_len: usize) -> PduResult<Vec<WriteBuf>> {
+    fn chunkify_one(message: SvcMessage, max_chunk_len: usize) -> EncodeResult<Vec<WriteBuf>> {
         let mut encoded_pdu = WriteBuf::new(); // TODO(perf): reuse this buffer using `clear` and `filled` as appropriate
         encode_buf(message.pdu.as_ref(), &mut encoded_pdu)?;
 
@@ -329,7 +350,7 @@ impl ChunkProcessor {
 
         let total_len = encoded_pdu.filled_len();
         let mut chunk_start_index: usize = 0;
-        let mut chunk_end_index = std::cmp::min(total_len, max_chunk_len);
+        let mut chunk_end_index = core::cmp::min(total_len, max_chunk_len);
         loop {
             // Create a buffer to hold this next chunk.
             // TODO(perf): Reuse this buffer using `clear` and `filled` as appropriate.
@@ -354,7 +375,7 @@ impl ChunkProcessor {
                 flags |= message.flags;
 
                 ChannelPduHeader {
-                    length: ironrdp_pdu::cast_int!(ChannelPduHeader::NAME, "length", total_len)?,
+                    length: ironrdp_core::cast_int!(ChannelPduHeader::NAME, "length", total_len)?,
                     flags,
                 }
             };
@@ -373,7 +394,7 @@ impl ChunkProcessor {
 
             // Otherwise, update the chunk start and end indices for the next iteration.
             chunk_start_index = chunk_end_index;
-            chunk_end_index = std::cmp::min(total_len, chunk_end_index.saturating_add(max_chunk_len));
+            chunk_end_index = core::cmp::min(total_len, chunk_end_index.saturating_add(max_chunk_len));
         }
 
         Ok(chunks)
@@ -400,30 +421,6 @@ pub fn make_channel_definition(channel: &StaticVirtualChannel) -> ChannelDef {
     let name = channel.channel_name();
     let options = make_channel_options(channel);
     ChannelDef { name, options }
-}
-
-/// Type information ([`TypeId`]) may be retrieved at runtime for this type.
-pub trait AsAny: 'static {
-    fn as_any(&self) -> &dyn Any;
-
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
-
-#[macro_export]
-macro_rules! impl_as_any {
-    ($t:ty) => {
-        impl $crate::AsAny for $t {
-            #[inline]
-            fn as_any(&self) -> &dyn core::any::Any {
-                self
-            }
-
-            #[inline]
-            fn as_any_mut(&mut self) -> &mut dyn core::any::Any {
-                self
-            }
-        }
-    };
 }
 
 /// A set holding at most one [`StaticVirtualChannel`] for any given type
@@ -657,8 +654,8 @@ impl ChannelPduHeader {
     const FIXED_PART_SIZE: usize = 4 /* len */ + 4 /* flags */;
 }
 
-impl PduEncode for ChannelPduHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ChannelPduHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         dst.write_u32(self.length);
         dst.write_u32(self.flags.bits());
         Ok(())

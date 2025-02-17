@@ -4,9 +4,9 @@ mod tests;
 use std::fmt;
 
 use bitflags::bitflags;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{
+    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 
 const GENERAL_LENGTH: usize = 20;
 pub const PROTOCOL_VER: u16 = 0x0200;
@@ -121,8 +121,8 @@ impl Default for General {
     }
 }
 
-impl PduEncode for General {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for General {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.major_platform_type.0);
@@ -149,8 +149,8 @@ impl PduEncode for General {
     }
 }
 
-impl<'de> PduDecode<'de> for General {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for General {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let major_platform_type = MajorPlatformType(src.read_u16());
@@ -162,27 +162,24 @@ impl<'de> PduDecode<'de> for General {
 
         let compression_types = src.read_u16();
         if compression_types != 0 {
-            return Err(invalid_message_err!("compressionTypes", "invalid compression types"));
+            return Err(invalid_field_err!("compressionTypes", "invalid compression types"));
         }
 
         let extra_flags = GeneralExtraFlags::from_bits_truncate(src.read_u16());
 
         let update_cap_flags = src.read_u16();
         if update_cap_flags != 0 {
-            return Err(invalid_message_err!("updateCapFlags", "invalid update cap flags"));
+            return Err(invalid_field_err!("updateCapFlags", "invalid update cap flags"));
         }
 
         let remote_unshare_flag = src.read_u16();
         if remote_unshare_flag != 0 {
-            return Err(invalid_message_err!(
-                "remoteUnshareFlags",
-                "invalid remote unshare flag"
-            ));
+            return Err(invalid_field_err!("remoteUnshareFlags", "invalid remote unshare flag"));
         }
 
         let compression_level = src.read_u16();
         if compression_level != 0 {
-            return Err(invalid_message_err!("compressionLevel", "invalid compression level"));
+            return Err(invalid_field_err!("compressionLevel", "invalid compression level"));
         }
 
         let refresh_rect_support = src.read_u8() != 0;

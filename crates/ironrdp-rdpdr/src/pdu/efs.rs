@@ -3,16 +3,16 @@
 //! [\[MS-RDPEFS\]: Remote Desktop Protocol: File System Virtual Channel Extension]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpefs/34d9de58-b2b5-40b6-b970-f82d4603bdb5
 
 use core::fmt;
-use std::fmt::{Debug, Display};
-use std::mem::size_of;
+use core::fmt::{Debug, Display};
+use core::mem::size_of;
 
 use bitflags::bitflags;
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::utils::{decode_string, encoded_str_len, from_utf16_bytes, write_string_to_cursor, CharacterSet};
-use ironrdp_pdu::{
-    cast_length, ensure_fixed_part_size, ensure_size, invalid_message_err, read_padding, unsupported_pdu_err,
-    write_padding, PduError, PduResult,
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, invalid_field_err_with_source,
+    unsupported_value_err, DecodeError, DecodeResult, EncodeResult, ReadCursor, WriteCursor,
 };
+use ironrdp_pdu::utils::{decode_string, encoded_str_len, from_utf16_bytes, write_string_to_cursor, CharacterSet};
+use ironrdp_pdu::{read_padding, write_padding, PduError};
 
 use super::esc::rpce;
 use super::{PacketId, SharedHeader};
@@ -58,9 +58,9 @@ pub struct VersionAndIdPdu {
 impl VersionAndIdPdu {
     const FIXED_PART_SIZE: usize = (size_of::<u16>() * 2) + size_of::<u32>();
 
-    pub fn new_client_announce_reply(req: VersionAndIdPdu) -> PduResult<Self> {
+    pub fn new_client_announce_reply(req: VersionAndIdPdu) -> DecodeResult<Self> {
         if req.kind != VersionAndIdPduKind::ServerAnnounceRequest {
-            return Err(invalid_message_err!(
+            return Err(invalid_field_err!(
                 "VersionAndIdPdu::new_client_announce_reply",
                 "VersionAndIdPduKind",
                 "invalid value"
@@ -75,7 +75,7 @@ impl VersionAndIdPdu {
         })
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(ctx: self.name(), in: dst, size: Self::FIXED_PART_SIZE);
         dst.write_u16(self.version_major);
         dst.write_u16(self.version_minor);
@@ -83,12 +83,12 @@ impl VersionAndIdPdu {
         Ok(())
     }
 
-    pub fn decode(header: SharedHeader, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(header: SharedHeader, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         let kind = match header.packet_id {
             PacketId::CoreServerAnnounce => VersionAndIdPduKind::ServerAnnounceRequest,
             PacketId::CoreClientidConfirm => VersionAndIdPduKind::ServerClientIdConfirm,
             _ => {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "VersionAndIdPdu::decode",
                     "PacketId",
                     "invalid value"
@@ -152,7 +152,7 @@ impl ClientNameRequest {
         }
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_u32(self.unicode_flag().into());
         dst.write_u32(0); // // CodePage (4 bytes): it MUST be set to 0
@@ -215,7 +215,7 @@ impl CoreCapability {
         }
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(ctx: self.name(), in: dst, size: self.size());
         dst.write_u16(cast_length!(
             "CoreCapability",
@@ -229,12 +229,12 @@ impl CoreCapability {
         Ok(())
     }
 
-    pub fn decode(header: SharedHeader, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(header: SharedHeader, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         let kind = match header.packet_id {
             PacketId::CoreServerCapability => CoreCapabilityKind::ServerCoreCapabilityRequest,
             PacketId::CoreClientCapability => CoreCapabilityKind::ClientCoreCapabilityResponse,
             _ => {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "CoreCapability::decode",
                     "PacketId",
                     "invalid value"
@@ -392,13 +392,13 @@ impl CapabilityMessage {
         }
     }
 
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.header.encode(dst)?;
         self.capability_data.encode(dst)
     }
 
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         let header = CapabilityHeader::decode(src)?;
         let capability_data = CapabilityData::decode(src, &header)?;
 
@@ -450,7 +450,7 @@ impl CapabilityHeader {
         }
     }
 
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_size!(in: src, size: Self::SIZE);
         let cap_type: CapabilityType = src.read_u16().try_into()?;
         let length = src.read_u16();
@@ -463,7 +463,7 @@ impl CapabilityHeader {
         })
     }
 
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: Self::SIZE);
         dst.write_u16(self.cap_type.into());
         dst.write_u16(self.length);
@@ -501,7 +501,7 @@ pub const SMARTCARD_CAPABILITY_VERSION_01: u32 = 0x0000_0001;
 pub const DRIVE_CAPABILITY_VERSION_02: u32 = 0x0000_0002;
 
 impl TryFrom<u16> for CapabilityType {
-    type Error = PduError;
+    type Error = DecodeError;
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
@@ -510,7 +510,7 @@ impl TryFrom<u16> for CapabilityType {
             0x0003 => Ok(CapabilityType::Port),
             0x0004 => Ok(CapabilityType::Drive),
             0x0005 => Ok(CapabilityType::Smartcard),
-            _ => Err(invalid_message_err!("try_from", "CapabilityType", "invalid value")),
+            _ => Err(invalid_field_err!("try_from", "CapabilityType", "invalid value")),
         }
     }
 }
@@ -525,14 +525,14 @@ enum CapabilityData {
 }
 
 impl CapabilityData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         match self {
             CapabilityData::General(general) => general.encode(dst),
             _ => Ok(()),
         }
     }
 
-    fn decode(src: &mut ReadCursor<'_>, header: &CapabilityHeader) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>, header: &CapabilityHeader) -> DecodeResult<Self> {
         match header.cap_type {
             CapabilityType::General => Ok(CapabilityData::General(GeneralCapabilitySet::decode(
                 src,
@@ -594,7 +594,7 @@ impl GeneralCapabilitySet {
     #[allow(clippy::manual_bits)]
     const SIZE: usize = size_of::<u32>() * 8 + size_of::<u16>() * 2;
 
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: Self::SIZE);
         dst.write_u32(self.os_type);
         dst.write_u32(self.os_version);
@@ -609,7 +609,7 @@ impl GeneralCapabilitySet {
         Ok(())
     }
 
-    fn decode(src: &mut ReadCursor<'_>, version: u32) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>, version: u32) -> DecodeResult<Self> {
         ensure_size!(in: src, size: Self::SIZE);
         let os_type = src.read_u32();
         let os_version = src.read_u32();
@@ -734,8 +734,8 @@ bitflags! {
 ///
 /// [Server Client ID Confirm (section 2.2.2.6)]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpefs/bbbb9666-6994-4cf6-8e65-0d46eb319c6e
 /// [2.2.2.3]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpefs/d6fe6d1b-c145-4a6f-99aa-4fe3cdcea398
-const VERSION_MINOR_12: u16 = 0x000C;
-const VERSION_MAJOR: u16 = 0x0001;
+pub const VERSION_MINOR_12: u16 = 0x000C;
+pub const VERSION_MAJOR: u16 = 0x0001;
 
 /// [2.2.2.9] Client Device List Announce Request (DR_CORE_DEVICELIST_ANNOUNCE_REQ)
 /// and [2.2.3.1] Client Device List Announce (DR_DEVICELIST_ANNOUNCE)
@@ -757,7 +757,7 @@ impl ClientDeviceListAnnounce {
         }
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         dst.write_u32(cast_length!(
             "ClientDeviceListAnnounce",
             "DeviceCount",
@@ -797,11 +797,11 @@ impl Devices {
     }
 
     /// Returns the [`DeviceType`] for the given device ID.
-    pub fn for_device_type(&self, device_id: u32) -> PduResult<DeviceType> {
+    pub fn for_device_type(&self, device_id: u32) -> DecodeResult<DeviceType> {
         if let Some(device_type) = self.0.iter().find(|d| d.device_id == device_id).map(|d| d.device_type) {
             Ok(device_type)
         } else {
-            Err(invalid_message_err!(
+            Err(invalid_field_err!(
                 "Devices::for_device_type",
                 "device_id",
                 "no device with that ID"
@@ -867,7 +867,7 @@ impl DeviceAnnounceHeader {
         }
     }
 
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         dst.write_u32(self.device_type.into());
         dst.write_u32(self.device_id);
         self.preferred_dos_name.encode(dst)?;
@@ -900,7 +900,7 @@ impl DeviceAnnounceHeader {
 struct PreferredDosName(String);
 
 impl PreferredDosName {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         write_string_to_cursor(dst, &self.format(), CharacterSet::Ansi, false)
     }
 
@@ -936,7 +936,7 @@ impl From<DeviceType> for u32 {
 }
 
 impl TryFrom<u32> for DeviceType {
-    type Error = PduError;
+    type Error = DecodeError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
@@ -945,7 +945,7 @@ impl TryFrom<u32> for DeviceType {
             0x0000_0004 => Ok(DeviceType::Print),
             0x0000_0008 => Ok(DeviceType::Filesystem),
             0x0000_0020 => Ok(DeviceType::Smartcard),
-            _ => Err(invalid_message_err!("try_from", "DeviceType", "invalid value")),
+            _ => Err(invalid_field_err!("try_from", "DeviceType", "invalid value")),
         }
     }
 }
@@ -967,14 +967,14 @@ impl ServerDeviceAnnounceResponse {
         Self::NAME
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_u32(self.device_id);
         dst.write_u32(self.result_code.into());
         Ok(())
     }
 
-    pub fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_size!(ctx: Self::NAME, in: src, size: Self::FIXED_PART_SIZE);
         let device_id = src.read_u32();
         let result_code = NtStatus::from(src.read_u32());
@@ -1069,7 +1069,7 @@ impl DeviceIoRequest {
         Self::NAME
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_u32(self.device_id);
         dst.write_u32(self.file_id);
@@ -1079,7 +1079,7 @@ impl DeviceIoRequest {
         Ok(())
     }
 
-    pub fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_size!(ctx: Self::NAME, in: src, size: Self::FIXED_PART_SIZE);
         let device_id = src.read_u32();
         let file_id = src.read_u32();
@@ -1130,7 +1130,7 @@ pub enum MajorFunction {
 }
 
 impl TryFrom<u32> for MajorFunction {
-    type Error = PduError;
+    type Error = DecodeError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
@@ -1145,7 +1145,7 @@ impl TryFrom<u32> for MajorFunction {
             0x0000_0006 => Ok(MajorFunction::SetInformation),
             0x0000_000c => Ok(MajorFunction::DirectoryControl),
             0x0000_0011 => Ok(MajorFunction::LockControl),
-            _ => Err(invalid_message_err!("try_from", "MajorFunction", "unsupported value")),
+            _ => Err(invalid_field_err!("try_from", "MajorFunction", "unsupported value")),
         }
     }
 }
@@ -1219,13 +1219,13 @@ where
         + 4 // IoControlCode
         + 20; // Additional 20 bytes for padding
 
-    pub fn decode(header: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(header: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_size!(ctx: "DeviceControlRequest", in: src, size: Self::HEADERLESS_SIZE);
         let output_buffer_length = src.read_u32();
         let input_buffer_length = src.read_u32();
         let io_control_code = T::try_from(src.read_u32()).map_err(|e| {
             error!("Failed to parse IoCtlCode");
-            invalid_message_err!("DeviceControlRequest", "IoCtlCode", "invalid IoCtlCode").with_source(e)
+            invalid_field_err_with_source("DeviceControlRequest", "IoCtlCode", "invalid IoCtlCode", e)
         })?;
 
         // Padding (20 bytes): An array of 20 bytes. Reserved. This field can be set to any value and MUST be ignored.
@@ -1338,7 +1338,7 @@ impl DeviceControlResponse {
         Self::NAME
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.device_io_reply.encode(dst)?;
         if let Some(output_buffer) = &self.output_buffer {
@@ -1387,7 +1387,7 @@ impl DeviceIoResponse {
         }
     }
 
-    pub fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_size!(ctx: "DeviceIoResponse", in: src, size: Self::FIXED_PART_SIZE);
         let device_id = src.read_u32();
         let completion_id = src.read_u32();
@@ -1400,7 +1400,7 @@ impl DeviceIoResponse {
         })
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_u32(self.device_id);
         dst.write_u32(self.completion_id);
@@ -1432,7 +1432,7 @@ pub enum ServerDriveIoRequest {
 }
 
 impl ServerDriveIoRequest {
-    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         match dev_io_req.major_function {
             MajorFunction::Create => Ok(DeviceCreateRequest::decode(dev_io_req, src)?.into()),
             MajorFunction::Close => Ok(DeviceCloseRequest::decode(dev_io_req).into()),
@@ -1442,7 +1442,7 @@ impl ServerDriveIoRequest {
             MajorFunction::QueryVolumeInformation => {
                 Ok(ServerDriveQueryVolumeInformationRequest::decode(dev_io_req, src)?.into())
             }
-            MajorFunction::SetVolumeInformation => Err(unsupported_pdu_err!(
+            MajorFunction::SetVolumeInformation => Err(unsupported_value_err!(
                 "ServerDriveIoRequest::decode",
                 "MajorFunction",
                 "SetVolumeInformation".to_owned()
@@ -1457,7 +1457,7 @@ impl ServerDriveIoRequest {
                     Ok(ServerDriveNotifyChangeDirectoryRequest::decode(dev_io_req, src)?.into())
                 }
                 // If MajorFunction is set to IRP_MJ_DIRECTORY_CONTROL and MinorFunction is set to any other value, we've encountered a server bug.
-                _ => Err(invalid_message_err!(
+                _ => Err(invalid_field_err!(
                     "ServerDriveIoRequest::decode",
                     "MinorFunction",
                     "invalid value"
@@ -1561,7 +1561,7 @@ impl DeviceCreateRequest {
                                  + 4  // CreateOptions
                                  + 4; // PathLength
 
-    fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_size!(ctx: "DeviceCreateRequest", in: src, size: Self::FIXED_PART_SIZE);
         let desired_access = DesiredAccess::from_bits_retain(src.read_u32());
         let allocation_size = src.read_u64();
@@ -1759,7 +1759,7 @@ impl DeviceCreateResponse {
         Self::NAME
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.device_io_reply.encode(dst)?;
         dst.write_u32(self.file_id);
@@ -1802,7 +1802,7 @@ pub struct ServerDriveQueryInformationRequest {
 }
 
 impl ServerDriveQueryInformationRequest {
-    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_size!(ctx: "ServerDriveQueryInformationRequest", in: src, size: 4);
         let file_info_class_lvl = FileInformationClassLevel::from(src.read_u32());
 
@@ -1908,7 +1908,7 @@ impl ClientDriveQueryInformationResponse {
         Self::NAME
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.device_io_response.encode(dst)?;
         if let Some(buffer) = &self.buffer {
@@ -1954,7 +1954,7 @@ pub enum FileInformationClass {
 }
 
 impl FileInformationClass {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         match self {
             Self::Basic(f) => f.encode(dst),
@@ -1964,7 +1964,7 @@ impl FileInformationClass {
             Self::FullDirectory(f) => f.encode(dst),
             Self::Names(f) => f.encode(dst),
             Self::Directory(f) => f.encode(dst),
-            _ => Err(unsupported_pdu_err!(
+            _ => Err(unsupported_value_err!(
                 "FileInformationClass::encode",
                 "FileInformationClass",
                 self.to_string()
@@ -1976,7 +1976,7 @@ impl FileInformationClass {
         file_info_class_level: FileInformationClassLevel,
         length: usize,
         src: &mut ReadCursor<'_>,
-    ) -> PduResult<Self> {
+    ) -> DecodeResult<Self> {
         match file_info_class_level {
             FileInformationClassLevel::FILE_BASIC_INFORMATION => Ok(FileBasicInformation::decode(src)?.into()),
             FileInformationClassLevel::FILE_END_OF_FILE_INFORMATION => {
@@ -1989,7 +1989,7 @@ impl FileInformationClass {
             FileInformationClassLevel::FILE_ALLOCATION_INFORMATION => {
                 Ok(FileAllocationInformation::decode(src)?.into())
             }
-            _ => Err(unsupported_pdu_err!(
+            _ => Err(unsupported_value_err!(
                 "FileInformationClass::decode",
                 "FileInformationClassLevel",
                 file_info_class_level.to_string()
@@ -2113,7 +2113,7 @@ pub struct FileBasicInformation {
 }
 
 impl FileBasicInformation {
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_size!(ctx: "FileBasicInformation", in: src, size: Self::size());
         let creation_time = src.read_i64();
         let last_access_time = src.read_i64();
@@ -2129,7 +2129,7 @@ impl FileBasicInformation {
         })
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: Self::size());
         dst.write_i64(self.creation_time);
         dst.write_i64(self.last_access_time);
@@ -2165,7 +2165,7 @@ pub struct FileStandardInformation {
 }
 
 impl FileStandardInformation {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: Self::size());
         dst.write_i64(self.allocation_size);
         dst.write_i64(self.end_of_file);
@@ -2222,7 +2222,7 @@ pub struct FileAttributeTagInformation {
 }
 
 impl FileAttributeTagInformation {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: Self::size());
         dst.write_u32(self.file_attributes.bits());
         dst.write_u32(self.reparse_tag);
@@ -2286,7 +2286,7 @@ impl FileBothDirectoryInformation {
         }
     }
 
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_u32(self.next_entry_offset);
         dst.write_u32(self.file_index);
@@ -2374,7 +2374,7 @@ impl FileFullDirectoryInformation {
         }
     }
 
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_u32(self.next_entry_offset);
         dst.write_u32(self.file_index);
@@ -2432,7 +2432,7 @@ impl FileNamesInformation {
         }
     }
 
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_u32(self.next_entry_offset);
         dst.write_u32(self.file_index);
@@ -2496,7 +2496,7 @@ impl FileDirectoryInformation {
         }
     }
 
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_u32(self.next_entry_offset);
         dst.write_u32(self.file_index);
@@ -2565,7 +2565,7 @@ impl DeviceCloseResponse {
         Self::NAME
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.device_io_response.encode(dst)?;
         dst.write_u32(0); // Padding
@@ -2592,7 +2592,7 @@ pub struct ServerDriveQueryDirectoryRequest {
 impl ServerDriveQueryDirectoryRequest {
     const FIXED_PART_SIZE: usize = 4 /* FsInformationClass */ + 1 /* InitialQuery */ + 4 /* PathLength */ + 23 /* Padding */;
 
-    fn decode(device_io_request: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(device_io_request: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let file_info_class_lvl = FileInformationClassLevel::from(src.read_u32());
 
@@ -2603,7 +2603,7 @@ impl ServerDriveQueryDirectoryRequest {
             | FileInformationClassLevel::FILE_BOTH_DIRECTORY_INFORMATION
             | FileInformationClassLevel::FILE_NAMES_INFORMATION => {}
             _ => {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "ServerDriveQueryDirectoryRequest::decode",
                     "file_info_class_lvl",
                     "received invalid level"
@@ -2641,7 +2641,7 @@ pub struct ServerDriveNotifyChangeDirectoryRequest {
 impl ServerDriveNotifyChangeDirectoryRequest {
     const FIXED_PART_SIZE: usize = 1 /* WatchTree */ + 4 /* CompletionFilter */ + 27 /* Padding */;
 
-    fn decode(device_io_request: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(device_io_request: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let watch_tree = src.read_u8();
         let completion_filter = src.read_u32();
@@ -2672,7 +2672,7 @@ impl ClientDriveQueryDirectoryResponse {
         Self::NAME
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.device_io_reply.encode(dst)?;
         dst.write_u32(cast_length!(
@@ -2707,7 +2707,7 @@ impl ClientDriveQueryDirectoryResponse {
 ///
 /// We only need to read the buffer up to the FileInformationClass to get the job done, so the rest of the fields in
 /// this structure are discarded. See FreeRDP:
-/// https://github.com/FreeRDP/FreeRDP/blob/511444a65e7aa2f537c5e531fa68157a50c1bd4d/channels/drive/client/drive_main.c#L464
+/// <https://github.com/FreeRDP/FreeRDP/blob/511444a65e7aa2f537c5e531fa68157a50c1bd4d/channels/drive/client/drive_main.c#L464>
 ///
 /// [2.2.3.3.6]: https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpefs/484e622d-0e2b-423c-8461-7de38878effb
 #[derive(Debug, PartialEq, Clone)]
@@ -2719,7 +2719,7 @@ pub struct ServerDriveQueryVolumeInformationRequest {
 impl ServerDriveQueryVolumeInformationRequest {
     const FIXED_PART_SIZE: usize = 4 /* FsInformationClass */ + 4 /* Length */ + 24 /* Padding */;
 
-    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let fs_info_class_lvl = FileSystemInformationClassLevel::from(src.read_u32());
 
@@ -2731,7 +2731,7 @@ impl ServerDriveQueryVolumeInformationRequest {
             | FileSystemInformationClassLevel::FILE_FS_FULL_SIZE_INFORMATION
             | FileSystemInformationClassLevel::FILE_FS_DEVICE_INFORMATION => {}
             _ => {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "ServerDriveQueryVolumeInformationRequest::decode",
                     "fs_info_class_lvl",
                     "received invalid level"
@@ -2756,7 +2756,7 @@ impl ServerDriveQueryVolumeInformationRequest {
 
 /// [2.5] File System Information Classes [MS-FSCC]
 ///
-/// [2.5] https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/ee12042a-9352-46e3-9f67-c094b75fe6c3
+/// [2.5] <https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/ee12042a-9352-46e3-9f67-c094b75fe6c3>
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FileSystemInformationClassLevel(u32);
 
@@ -2804,7 +2804,7 @@ pub enum FileSystemInformationClass {
 }
 
 impl FileSystemInformationClass {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         match self {
             Self::FileFsVolumeInformation(f) => f.encode(dst),
@@ -2870,7 +2870,7 @@ pub struct FileFsVolumeInformation {
 }
 
 impl FileFsVolumeInformation {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_i64(self.volume_creation_time);
         dst.write_u32(self.volume_serial_number);
@@ -2905,7 +2905,7 @@ pub struct FileFsSizeInformation {
 }
 
 impl FileFsSizeInformation {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_i64(self.total_alloc_units);
         dst.write_i64(self.available_alloc_units);
@@ -2933,7 +2933,7 @@ pub struct FileFsAttributeInformation {
 }
 
 impl FileFsAttributeInformation {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         dst.write_u32(self.file_system_attributes.bits());
         dst.write_u32(self.max_component_name_len);
@@ -2967,7 +2967,7 @@ pub struct FileFsFullSizeInformation {
 }
 
 impl FileFsFullSizeInformation {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: Self::size());
         dst.write_i64(self.total_alloc_units);
         dst.write_i64(self.caller_available_alloc_units);
@@ -2996,7 +2996,7 @@ pub struct FileFsDeviceInformation {
 }
 
 impl FileFsDeviceInformation {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: Self::size());
         dst.write_u32(self.device_type);
         dst.write_u32(self.characteristics.bits());
@@ -3089,7 +3089,7 @@ impl ClientDriveQueryVolumeInformationResponse {
         Self::NAME
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.device_io_reply.encode(dst)?;
         dst.write_u32(cast_length!(
@@ -3132,7 +3132,7 @@ pub struct DeviceReadRequest {
 impl DeviceReadRequest {
     const FIXED_PART_SIZE: usize = 4 /* Length */ + 8 /* Offset */ + 20 /* Padding */;
 
-    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let length = src.read_u32();
         let offset = src.read_u64();
@@ -3158,7 +3158,7 @@ pub struct DeviceReadResponse {
 impl DeviceReadResponse {
     const NAME: &'static str = "DR_READ_RSP";
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.device_io_reply.encode(dst)?;
         dst.write_u32(cast_length!("DeviceReadResponse", "length", self.read_data.len())?);
@@ -3178,7 +3178,7 @@ impl DeviceReadResponse {
 }
 
 impl Debug for DeviceReadResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeviceReadResponse")
             .field("device_io_reply", &self.device_io_reply)
             .field("read_data", &format!("Vec<u8> of length {}", self.read_data.len()))
@@ -3199,7 +3199,7 @@ pub struct DeviceWriteRequest {
 impl DeviceWriteRequest {
     const FIXED_PART_SIZE: usize = 4 /* Length */ + 8 /* Offset */ + 20 /* Padding */;
 
-    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let length = cast_length!("DeviceWriteRequest", "length", src.read_u32())?;
         let offset = src.read_u64();
@@ -3243,7 +3243,7 @@ impl DeviceWriteResponse {
         Self::NAME
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.device_io_reply.encode(dst)?;
         dst.write_u32(self.length);
@@ -3270,7 +3270,7 @@ pub struct ServerDriveSetInformationRequest {
 impl ServerDriveSetInformationRequest {
     const FIXED_PART_SIZE: usize = 4 /* FileInformationClass */ + 4 /* Length */ + 24 /* Padding */;
 
-    fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let file_information_class_level = FileInformationClassLevel::from(src.read_u32());
 
@@ -3282,7 +3282,7 @@ impl ServerDriveSetInformationRequest {
             | FileInformationClassLevel::FILE_RENAME_INFORMATION
             | FileInformationClassLevel::FILE_ALLOCATION_INFORMATION => {}
             _ => {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "ServerDriveSetInformationRequest::decode",
                     "file_information_class_level",
                     "received invalid level"
@@ -3314,7 +3314,7 @@ pub struct FileEndOfFileInformation {
 impl FileEndOfFileInformation {
     const FIXED_PART_SIZE: usize = 8; // EndOfFile
 
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let end_of_file = src.read_i64();
         Ok(Self { end_of_file })
@@ -3336,7 +3336,7 @@ pub struct FileDispositionInformation {
 impl FileDispositionInformation {
     const FIXED_PART_SIZE: usize = 1; // DeletePending
 
-    fn decode(src: &mut ReadCursor<'_>, length: usize) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>, length: usize) -> DecodeResult<Self> {
         // https://github.com/FreeRDP/FreeRDP/blob/dfa231c0a55b005af775b833f92f6bcd30363d77/channels/drive/client/drive_file.c#L684-L692
         let delete_pending = if length != 0 {
             ensure_fixed_part_size!(in: src);
@@ -3365,7 +3365,7 @@ pub struct FileRenameInformation {
 impl FileRenameInformation {
     const FIXED_PART_SIZE: usize = 1 /* ReplaceIfExists */ + 1 /* RootDirectory */ + 4 /* FileNameLength */;
 
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let replace_if_exists = Boolean::from(src.read_u8());
         let _ = src.read_u8(); // RootDirectory
@@ -3396,7 +3396,7 @@ pub struct FileAllocationInformation {
 impl FileAllocationInformation {
     const FIXED_PART_SIZE: usize = 8; // AllocationSize
 
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let allocation_size = src.read_i64();
         Ok(Self { allocation_size })
@@ -3420,14 +3420,14 @@ pub struct ClientDriveSetInformationResponse {
 impl ClientDriveSetInformationResponse {
     const NAME: &'static str = "DR_DRIVE_SET_INFORMATION_RSP";
 
-    pub fn new(req: &ServerDriveSetInformationRequest, io_status: NtStatus) -> PduResult<Self> {
+    pub fn new(req: &ServerDriveSetInformationRequest, io_status: NtStatus) -> EncodeResult<Self> {
         Ok(Self {
             device_io_reply: DeviceIoResponse::new(req.device_io_request.clone(), io_status),
             length: cast_length!("ClientDriveSetInformationResponse", "length", req.set_buffer.size())?,
         })
     }
 
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
         self.device_io_reply.encode(dst)?;
         dst.write_u32(self.length);
@@ -3453,7 +3453,7 @@ pub struct ServerDriveLockControlRequest {
 }
 
 impl ServerDriveLockControlRequest {
-    fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    fn decode(dev_io_req: DeviceIoRequest, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         // It's not quite clear why this is done this way, but it's what FreeRDP does:
         // https://github.com/FreeRDP/FreeRDP/blob/dfa231c0a55b005af775b833f92f6bcd30363d77/channels/drive/client/drive_main.c#L600
         ensure_size!(in: src, size: 4);

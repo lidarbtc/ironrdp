@@ -1,10 +1,13 @@
+#![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://cdnweb.devolutions.net/images/projects/devolutions/logos/devolutions-icon-shadow.svg")]
+
 use bitflags::bitflags;
-use ironrdp_dvc::DvcPduEncode;
+use ironrdp_core::{
+    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
+use ironrdp_dvc::DvcEncode;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive as _, ToPrimitive as _};
-
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::{ensure_fixed_part_size, invalid_message_err, PduDecode, PduEncode, PduResult};
 // Advanced Input channel as defined from Freerdp, [here]:
 //
 // [here]: https://github.com/FreeRDP/FreeRDP/blob/master/include/freerdp/channels/ainput.h
@@ -57,8 +60,8 @@ impl Default for VersionPdu {
     }
 }
 
-impl PduEncode for VersionPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for VersionPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.major_version);
@@ -76,8 +79,8 @@ impl PduEncode for VersionPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for VersionPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for VersionPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let major_version = src.read_u32();
@@ -114,8 +117,8 @@ impl ServerPdu {
     const FIXED_PART_SIZE: usize = 2 /* PduType */;
 }
 
-impl PduEncode for ServerPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(ServerPduType::from(self).to_u16().unwrap());
@@ -137,14 +140,14 @@ impl PduEncode for ServerPdu {
     }
 }
 
-impl DvcPduEncode for ServerPdu {}
+impl DvcEncode for ServerPdu {}
 
-impl<'de> PduDecode<'de> for ServerPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ServerPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
-        let pdu_type = ServerPduType::from_u16(src.read_u16())
-            .ok_or_else(|| invalid_message_err!("pduType", "invalid pdu type"))?;
+        let pdu_type =
+            ServerPduType::from_u16(src.read_u16()).ok_or_else(|| invalid_field_err!("pduType", "invalid pdu type"))?;
 
         let server_pdu = match pdu_type {
             ServerPduType::Version => ServerPdu::Version(VersionPdu::decode(src)?),
@@ -168,8 +171,8 @@ impl MousePdu {
     const FIXED_PART_SIZE: usize = 8 /* Time */ + 8 /* Flags */ + 4 /* X */ + 4 /* Y */;
 }
 
-impl PduEncode for MousePdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for MousePdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u64(self.time);
@@ -189,8 +192,8 @@ impl PduEncode for MousePdu {
     }
 }
 
-impl<'de> PduDecode<'de> for MousePdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for MousePdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let time = src.read_u64();
@@ -213,8 +216,8 @@ impl ClientPdu {
     const FIXED_PART_SIZE: usize = 2 /* PduType */;
 }
 
-impl PduEncode for ClientPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(ClientPduType::from(self).to_u16().unwrap());
@@ -236,12 +239,12 @@ impl PduEncode for ClientPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
-        let pdu_type = ClientPduType::from_u16(src.read_u16())
-            .ok_or_else(|| invalid_message_err!("pduType", "invalid pdu type"))?;
+        let pdu_type =
+            ClientPduType::from_u16(src.read_u16()).ok_or_else(|| invalid_field_err!("pduType", "invalid pdu type"))?;
 
         let client_pdu = match pdu_type {
             ClientPduType::Mouse => ClientPdu::Mouse(MousePdu::decode(src)?),

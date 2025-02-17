@@ -4,6 +4,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
+#![allow(unused_crate_dependencies)]
 
 #[macro_use]
 extern crate array_concat;
@@ -29,8 +30,6 @@ pub mod multi_transport_channel_data;
 pub mod network_data;
 pub mod rdp;
 pub mod security_data;
-
-pub mod now_proto;
 
 #[doc(hidden)]
 pub use paste::paste;

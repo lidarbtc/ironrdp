@@ -6,9 +6,10 @@ pub type CredsspGeneratorState =
 #[diplomat::bridge]
 pub mod ffi {
 
-    use crate::{credssp::ffi::TsRequest, error::ffi::IronRdpError, utils::ffi::VecU8};
-
     use super::CredsspGeneratorState;
+    use crate::credssp::ffi::TsRequest;
+    use crate::error::ffi::IronRdpError;
+    use crate::utils::ffi::VecU8;
 
     #[diplomat::opaque]
     pub struct CredsspProcessGenerator<'a>(pub ironrdp::connector::credssp::CredsspProcessGenerator<'a>);
@@ -94,7 +95,7 @@ pub mod ffi {
         }
 
         pub fn get_url(&self, writeable: &mut diplomat_runtime::DiplomatWriteable) -> Result<(), Box<IronRdpError>> {
-            use std::fmt::Write;
+            use core::fmt::Write;
             let url: &str = self.0.url.as_ref();
             write!(writeable, "{}", url)?;
             Ok(())

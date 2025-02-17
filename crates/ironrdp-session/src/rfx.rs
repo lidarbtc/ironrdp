@@ -1,6 +1,7 @@
-use std::cmp::min;
+use core::cmp::min;
 
 use ironrdp_graphics::color_conversion::{self, YCbCrBuffer};
+use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_graphics::rectangle_processing::Region;
 use ironrdp_graphics::{dwt, quantization, rlgr, subband_reconstruction};
 use ironrdp_pdu::codecs::rfx::{self, EntropyAlgorithm, Headers, Quant, RfxRectangle, Tile};
@@ -45,7 +46,8 @@ impl DecodingContext {
         input: &mut &[u8],
     ) -> SessionResult<(FrameId, InclusiveRectangle)> {
         loop {
-            let block_header = rfx::BlockHeader::from_buffer_consume(input)?;
+            let block_header =
+                rfx::BlockHeader::from_buffer_consume(input).map_err(|e| custom_err!("decode header", e))?;
             match block_header.ty {
                 rfx::BlockType::Sync => {
                     self.process_sync(input, block_header)?;
@@ -65,7 +67,8 @@ impl DecodingContext {
     }
 
     fn process_sync(&mut self, input: &mut &[u8], header: rfx::BlockHeader) -> SessionResult<()> {
-        let _sync = rfx::SyncPdu::from_buffer_consume_with_header(input, header)?;
+        let _sync =
+            rfx::SyncPdu::from_buffer_consume_with_header(input, header).map_err(|e| custom_err!("decode sync", e))?;
         self.process_headers(input)
     }
 
@@ -75,7 +78,7 @@ impl DecodingContext {
 
         // headers can appear in any order: CodecVersions, Channels, Context
         for _ in 0..3 {
-            match Headers::from_buffer_consume(input)? {
+            match Headers::from_buffer_consume(input).map_err(|e| custom_err!("decode headers", e))? {
                 Headers::Context(c) => context = Some(c),
                 Headers::Channels(c) => channels = Some(c),
                 Headers::CodecVersions(_) => (),
@@ -107,10 +110,12 @@ impl DecodingContext {
         let height = channel.height.as_u16();
         let entropy_algorithm = self.context.entropy_algorithm;
 
-        let frame_begin = rfx::FrameBeginPdu::from_buffer_consume_with_header(input, header)?;
-        let mut region = rfx::RegionPdu::from_buffer_consume(input)?;
-        let tile_set = rfx::TileSetPdu::from_buffer_consume(input)?;
-        let _frame_end = rfx::FrameEndPdu::from_buffer_consume(input)?;
+        let frame_begin = rfx::FrameBeginPdu::from_buffer_consume_with_header(input, header)
+            .map_err(|e| custom_err!("decode frame_begin", e))?;
+        let mut region = rfx::RegionPdu::from_buffer_consume(input).map_err(|e| custom_err!("decode region", e))?;
+        let tile_set = rfx::TileSetPdu::from_buffer_consume(input).map_err(|e| custom_err!("decode tile_set", e))?;
+        let _frame_end =
+            rfx::FrameEndPdu::from_buffer_consume(input).map_err(|e| custom_err!("decode frame_end", e))?;
 
         if region.rectangles.is_empty() {
             region.rectangles = vec![RfxRectangle {
@@ -146,6 +151,7 @@ impl DecodingContext {
 
             let current_update_rectangle = image.apply_tile(
                 &self.decoding_tiles.tile_output,
+                PixelFormat::RgbA32,
                 &clipping_rectangles,
                 &update_rectangle,
             )?;
@@ -191,7 +197,7 @@ fn decode_tile(
         cr: ycbcr_temp[2].as_slice(),
     };
 
-    color_conversion::ycbcr_to_bgra(ycbcr_buffer, output).map_err(|e| custom_err!("decode_tile", e))?;
+    color_conversion::ycbcr_to_rgba(ycbcr_buffer, output).map_err(|e| custom_err!("decode_tile", e))?;
 
     Ok(())
 }

@@ -3,13 +3,15 @@ mod tests;
 
 pub mod rdp6;
 
-use std::fmt::{self, Debug};
+use core::fmt::{self, Debug};
 
 use bitflags::bitflags;
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 
-use crate::cursor::ReadCursor;
 use crate::geometry::InclusiveRectangle;
-use crate::{PduDecode, PduEncode, PduResult};
 
 const FIRST_ROW_SIZE_VALUE: u16 = 0;
 
@@ -25,7 +27,7 @@ impl BitmapUpdateData<'_> {
 }
 
 impl BitmapUpdateData<'_> {
-    pub fn encode_header(rectangles: u16, dst: &mut crate::cursor::WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode_header(rectangles: u16, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: 2);
 
         dst.write_u16(BitmapFlags::BITMAP_UPDATE_TYPE.bits());
@@ -35,12 +37,12 @@ impl BitmapUpdateData<'_> {
     }
 }
 
-impl PduEncode for BitmapUpdateData<'_> {
-    fn encode(&self, dst: &mut crate::cursor::WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BitmapUpdateData<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         if self.rectangles.len() > u16::MAX as usize {
-            return Err(invalid_message_err!("numberRectangles", "rectangle count is too big"));
+            return Err(invalid_field_err!("numberRectangles", "rectangle count is too big"));
         }
 
         Self::encode_header(self.rectangles.len() as u16, dst)?;
@@ -63,13 +65,13 @@ impl PduEncode for BitmapUpdateData<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for BitmapUpdateData<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for BitmapUpdateData<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let update_type = BitmapFlags::from_bits_truncate(src.read_u16());
         if !update_type.contains(BitmapFlags::BITMAP_UPDATE_TYPE) {
-            return Err(invalid_message_err!("updateType", "invalid update type"));
+            return Err(invalid_field_err!("updateType", "invalid update type"));
         }
 
         let rectangles_number = src.read_u16() as usize;
@@ -104,13 +106,13 @@ impl BitmapData<'_> {
     }
 }
 
-impl PduEncode for BitmapData<'_> {
-    fn encode(&self, dst: &mut crate::cursor::WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BitmapData<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let encoded_bitmap_data_length = self.encoded_bitmap_data_length();
         if encoded_bitmap_data_length > u16::MAX as usize {
-            return Err(invalid_message_err!("bitmapLength", "bitmap data length is too big"));
+            return Err(invalid_field_err!("bitmapLength", "bitmap data length is too big"));
         }
 
         self.rectangle.encode(dst)?;
@@ -136,8 +138,8 @@ impl PduEncode for BitmapData<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for BitmapData<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for BitmapData<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let rectangle = InclusiveRectangle::decode(src)?;
@@ -157,7 +159,7 @@ impl<'de> PduDecode<'de> for BitmapData<'de> {
         {
             // Check if encoded_bitmap_data_length is at least CompressedDataHeader::ENCODED_SIZE
             if encoded_bitmap_data_length < CompressedDataHeader::ENCODED_SIZE as u16 {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "cbCompEncodedBitmapDataLength",
                     "length is less than CompressedDataHeader::ENCODED_SIZE"
                 ));
@@ -212,20 +214,20 @@ impl CompressedDataHeader {
     pub const ENCODED_SIZE: usize = Self::FIXED_PART_SIZE;
 }
 
-impl<'de> PduDecode<'de> for CompressedDataHeader {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for CompressedDataHeader {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let size = src.read_u16();
         if size != FIRST_ROW_SIZE_VALUE {
-            return Err(invalid_message_err!("cbCompFirstRowSize", "invalid first row size"));
+            return Err(invalid_field_err!("cbCompFirstRowSize", "invalid first row size"));
         }
 
         let main_body_size = src.read_u16();
         let scan_width = src.read_u16();
 
         if scan_width % 4 != 0 {
-            return Err(invalid_message_err!(
+            return Err(invalid_field_err!(
                 "cbScanWidth",
                 "The width of the bitmap must be divisible by 4"
             ));
@@ -240,12 +242,12 @@ impl<'de> PduDecode<'de> for CompressedDataHeader {
     }
 }
 
-impl PduEncode for CompressedDataHeader {
-    fn encode(&self, dst: &mut crate::cursor::WriteCursor<'_>) -> PduResult<()> {
+impl Encode for CompressedDataHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         if self.scan_width % 4 != 0 {
-            return Err(invalid_message_err!(
+            return Err(invalid_field_err!(
                 "cbScanWidth",
                 "The width of the bitmap must be divisible by 4"
             ));

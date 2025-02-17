@@ -3,16 +3,19 @@ mod tests;
 
 use bit_field::BitField;
 use bitflags::bitflags;
+use ironrdp_core::{
+    decode_cursor, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeError, DecodeResult, Encode,
+    EncodeResult, InvalidFieldErr, ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use super::bitmap::BitmapUpdateData;
 use super::pointer::PointerUpdateData;
 use super::surface_commands::{SurfaceCommand, SURFACE_COMMAND_HEADER_SIZE};
-use crate::cursor::{ReadCursor, WriteCursor};
+use crate::per;
 use crate::rdp::client_info::CompressionType;
 use crate::rdp::headers::{CompressionFlags, SHARE_DATA_HEADER_COMPRESSION_MASK};
-use crate::{decode_cursor, per, PduDecode, PduEncode, PduResult};
 
 /// Implements the Fast-Path RDP message header PDU.
 /// TS_FP_UPDATE_PDU
@@ -40,8 +43,8 @@ impl FastPathHeader {
     }
 }
 
-impl PduEncode for FastPathHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FastPathHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let mut header = 0u8;
@@ -51,7 +54,7 @@ impl PduEncode for FastPathHeader {
 
         let length = self.data_length + self.size();
         if length > u16::MAX as usize {
-            return Err(invalid_message_err!("length", "fastpath PDU length is too big"));
+            return Err(invalid_field_err!("length", "fastpath PDU length is too big"));
         }
 
         if self.forced_long_length {
@@ -77,17 +80,18 @@ impl PduEncode for FastPathHeader {
     }
 }
 
-impl<'de> PduDecode<'de> for FastPathHeader {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FastPathHeader {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let header = src.read_u8();
         let flags = EncryptionFlags::from_bits_truncate(header.get_bits(6..8));
 
-        let (length, sizeof_length) = per::read_length(src)
-            .map_err(|e| invalid_message_err!("length", "Invalid encoded fast path PDU length").with_source(e))?;
+        let (length, sizeof_length) = per::read_length(src).map_err(|e| {
+            DecodeError::invalid_field("", "length", "Invalid encoded fast path PDU length").with_source(e)
+        })?;
         if (length as usize) < sizeof_length + Self::FIXED_PART_SIZE {
-            return Err(invalid_message_err!(
+            return Err(invalid_field_err!(
                 "length",
                 "received fastpath PDU length is smaller than header size"
             ));
@@ -120,12 +124,12 @@ impl FastPathUpdatePdu<'_> {
     const FIXED_PART_SIZE: usize = 1 /* header */;
 }
 
-impl PduEncode for FastPathUpdatePdu<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FastPathUpdatePdu<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         if self.data.len() > u16::MAX as usize {
-            return Err(invalid_message_err!("data", "fastpath PDU data is too big"));
+            return Err(invalid_field_err!("data", "fastpath PDU data is too big"));
         }
 
         let mut header = 0u8;
@@ -158,19 +162,19 @@ impl PduEncode for FastPathUpdatePdu<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for FastPathUpdatePdu<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FastPathUpdatePdu<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let header = src.read_u8();
 
         let update_code = header.get_bits(0..4);
-        let update_code =
-            UpdateCode::from_u8(update_code).ok_or(invalid_message_err!("updateHeader", "Invalid update code"))?;
+        let update_code = UpdateCode::from_u8(update_code)
+            .ok_or_else(|| invalid_field_err!("updateHeader", "Invalid update code"))?;
 
         let fragmentation = header.get_bits(4..6);
         let fragmentation = Fragmentation::from_u8(fragmentation)
-            .ok_or(invalid_message_err!("updateHeader", "Invalid fragmentation"))?;
+            .ok_or_else(|| invalid_field_err!("updateHeader", "Invalid fragmentation"))?;
 
         let compression = Compression::from_bits_truncate(header.get_bits(6..8));
 
@@ -183,7 +187,7 @@ impl<'de> PduDecode<'de> for FastPathUpdatePdu<'de> {
                 CompressionFlags::from_bits_truncate(compression_flags_with_type & !SHARE_DATA_HEADER_COMPRESSION_MASK);
             let compression_type =
                 CompressionType::from_u8(compression_flags_with_type & SHARE_DATA_HEADER_COMPRESSION_MASK)
-                    .ok_or_else(|| invalid_message_err!("compressionFlags", "invalid compression type"))?;
+                    .ok_or_else(|| invalid_field_err!("compressionFlags", "invalid compression type"))?;
 
             (Some(compression_flags), Some(compression_type))
         } else {
@@ -218,12 +222,12 @@ pub enum FastPathUpdate<'a> {
 impl<'a> FastPathUpdate<'a> {
     const NAME: &'static str = "TS_FP_UPDATE data";
 
-    pub fn decode_with_code(src: &'a [u8], code: UpdateCode) -> PduResult<Self> {
+    pub fn decode_with_code(src: &'a [u8], code: UpdateCode) -> DecodeResult<Self> {
         let mut cursor = ReadCursor::<'a>::new(src);
         Self::decode_cursor_with_code(&mut cursor, code)
     }
 
-    pub fn decode_cursor_with_code(src: &mut ReadCursor<'a>, code: UpdateCode) -> PduResult<Self> {
+    pub fn decode_cursor_with_code(src: &mut ReadCursor<'a>, code: UpdateCode) -> DecodeResult<Self> {
         match code {
             UpdateCode::SurfaceCommands => {
                 let mut commands = Vec::with_capacity(1);
@@ -244,7 +248,7 @@ impl<'a> FastPathUpdate<'a> {
             UpdateCode::CachedPointer => Ok(Self::Pointer(PointerUpdateData::Cached(decode_cursor(src)?))),
             UpdateCode::NewPointer => Ok(Self::Pointer(PointerUpdateData::New(decode_cursor(src)?))),
             UpdateCode::LargePointer => Ok(Self::Pointer(PointerUpdateData::Large(decode_cursor(src)?))),
-            _ => Err(invalid_message_err!("updateCode", "Invalid fast path update code")),
+            _ => Err(invalid_field_err!("updateCode", "Invalid fast path update code")),
         }
     }
 
@@ -257,8 +261,8 @@ impl<'a> FastPathUpdate<'a> {
     }
 }
 
-impl PduEncode for FastPathUpdate<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FastPathUpdate<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         match self {

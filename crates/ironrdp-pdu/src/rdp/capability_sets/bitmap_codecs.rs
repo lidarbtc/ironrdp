@@ -2,12 +2,12 @@
 mod tests;
 
 use bitflags::bitflags;
+use ironrdp_core::{
+    cast_length, decode, ensure_fixed_part_size, ensure_size, invalid_field_err, other_err, Decode, DecodeResult,
+    Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::decode;
-use crate::{PduDecode, PduEncode, PduResult};
 
 const RFX_ICAP_VERSION: u16 = 0x0100;
 const RFX_ICAP_TILE_SIZE: u16 = 0x40;
@@ -47,8 +47,8 @@ impl Guid {
     const FIXED_PART_SIZE: usize = 16;
 }
 
-impl PduEncode for Guid {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Guid {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.0);
@@ -75,8 +75,8 @@ impl PduEncode for Guid {
     }
 }
 
-impl<'de> PduDecode<'de> for Guid {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Guid {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let guid1 = src.read_u32();
@@ -106,8 +106,8 @@ impl BitmapCodecs {
     const FIXED_PART_SIZE: usize = 1 /* len */;
 }
 
-impl PduEncode for BitmapCodecs {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BitmapCodecs {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u8(cast_length!("len", self.0.len())?);
@@ -124,12 +124,12 @@ impl PduEncode for BitmapCodecs {
     }
 
     fn size(&self) -> usize {
-        Self::FIXED_PART_SIZE + self.0.iter().map(PduEncode::size).sum::<usize>()
+        Self::FIXED_PART_SIZE + self.0.iter().map(Encode::size).sum::<usize>()
     }
 }
 
-impl<'de> PduDecode<'de> for BitmapCodecs {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for BitmapCodecs {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let codecs_count = src.read_u8();
@@ -155,8 +155,8 @@ impl Codec {
     const FIXED_PART_SIZE: usize = CODEC_STATIC_DATA_LENGTH;
 }
 
-impl PduEncode for Codec {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Codec {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let guid = match &self.property {
@@ -230,8 +230,8 @@ impl PduEncode for Codec {
     }
 }
 
-impl<'de> PduDecode<'de> for Codec {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Codec {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let guid = Guid::decode(src)?;
@@ -264,7 +264,7 @@ impl<'de> PduDecode<'de> for Codec {
         } else {
             match guid {
                 GUID_NSCODEC | GUID_REMOTEFX | GUID_IMAGE_REMOTEFX => {
-                    return Err(invalid_message_err!(
+                    return Err(invalid_field_err!(
                         "codecPropertiesLen",
                         "invalid codec property length"
                     ));
@@ -319,8 +319,8 @@ impl NsCodec {
     const FIXED_PART_SIZE: usize = NSCODEC_LENGTH;
 }
 
-impl PduEncode for NsCodec {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for NsCodec {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u8(u8::from(self.is_dynamic_fidelity_allowed));
@@ -339,8 +339,8 @@ impl PduEncode for NsCodec {
     }
 }
 
-impl<'de> PduDecode<'de> for NsCodec {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for NsCodec {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let is_dynamic_fidelity_allowed = src.read_u8() != 0;
@@ -368,8 +368,8 @@ impl RfxClientCapsContainer {
     const FIXED_PART_SIZE: usize = RFX_CLIENT_CAPS_CONTAINER_STATIC_DATA_LENGTH;
 }
 
-impl PduEncode for RfxClientCapsContainer {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for RfxClientCapsContainer {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(cast_length!("len", self.size())?);
@@ -389,8 +389,8 @@ impl PduEncode for RfxClientCapsContainer {
     }
 }
 
-impl<'de> PduDecode<'de> for RfxClientCapsContainer {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for RfxClientCapsContainer {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let _length = src.read_u32();
         let capture_flags = CaptureFlags::from_bits_truncate(src.read_u32());
         let _caps_length = src.read_u32();
@@ -412,8 +412,8 @@ impl RfxCaps {
     const FIXED_PART_SIZE: usize = RFX_CAPS_STATIC_DATA_LENGTH;
 }
 
-impl PduEncode for RfxCaps {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for RfxCaps {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(RFX_CAPS_BLOCK_TYPE);
@@ -433,23 +433,23 @@ impl PduEncode for RfxCaps {
     }
 }
 
-impl<'de> PduDecode<'de> for RfxCaps {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for RfxCaps {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let block_type = src.read_u16();
         if block_type != RFX_CAPS_BLOCK_TYPE {
-            return Err(invalid_message_err!("blockType", "invalid rfx caps block type"));
+            return Err(invalid_field_err!("blockType", "invalid rfx caps block type"));
         }
 
         let block_len = src.read_u32();
         if block_len != RFX_CAPS_BLOCK_LENGTH {
-            return Err(invalid_message_err!("blockLen", "invalid rfx caps block length"));
+            return Err(invalid_field_err!("blockLen", "invalid rfx caps block length"));
         }
 
         let num_capsets = src.read_u16();
         if num_capsets != RFX_CAPS_NUM_CAPSETS {
-            return Err(invalid_message_err!("numCapsets", "invalid rfx caps num capsets"));
+            return Err(invalid_field_err!("numCapsets", "invalid rfx caps num capsets"));
         }
 
         let capsets_data = RfxCapset::decode(src)?;
@@ -467,8 +467,8 @@ impl RfxCapset {
     const FIXED_PART_SIZE: usize = RFX_CAPSET_STATIC_DATA_LENGTH;
 }
 
-impl PduEncode for RfxCapset {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for RfxCapset {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(RFX_CAPSET_BLOCK_TYPE);
@@ -497,23 +497,23 @@ impl PduEncode for RfxCapset {
     }
 }
 
-impl<'de> PduDecode<'de> for RfxCapset {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for RfxCapset {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let block_type = src.read_u16();
         if block_type != RFX_CAPSET_BLOCK_TYPE {
-            return Err(invalid_message_err!("blockType", "invalid rfx capset block type"));
+            return Err(invalid_field_err!("blockType", "invalid rfx capset block type"));
         }
 
         let _block_len = src.read_u32();
 
         let codec_id = src.read_u8();
         if codec_id != 1 {
-            return Err(invalid_message_err!("codecId", "invalid rfx codec ID"));
+            return Err(invalid_field_err!("codecId", "invalid rfx codec ID"));
         }
 
         let capset_type = src.read_u16();
         if capset_type != RFX_CAPSET_TYPE {
-            return Err(invalid_message_err!("capsetType", "invalid rfx capset type"));
+            return Err(invalid_field_err!("capsetType", "invalid rfx capset type"));
         }
 
         let num_icaps = src.read_u16();
@@ -540,8 +540,8 @@ impl RfxICap {
     const FIXED_PART_SIZE: usize = RFX_ICAP_LENGTH;
 }
 
-impl PduEncode for RfxICap {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for RfxICap {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(RFX_ICAP_VERSION);
@@ -563,34 +563,34 @@ impl PduEncode for RfxICap {
     }
 }
 
-impl<'de> PduDecode<'de> for RfxICap {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for RfxICap {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let version = src.read_u16();
         if version != RFX_ICAP_VERSION {
-            return Err(invalid_message_err!("version", "invalid rfx icap version"));
+            return Err(invalid_field_err!("version", "invalid rfx icap version"));
         }
 
         let tile_size = src.read_u16();
         if tile_size != RFX_ICAP_TILE_SIZE {
-            return Err(invalid_message_err!("tileSize", "invalid rfx icap tile size"));
+            return Err(invalid_field_err!("tileSize", "invalid rfx icap tile size"));
         }
 
         let flags = RfxICapFlags::from_bits_truncate(src.read_u8());
 
         let color_conversion = src.read_u8();
         if color_conversion != RFX_ICAP_COLOR_CONVERSION {
-            return Err(invalid_message_err!("colorConv", "invalid rfx color conversion bits"));
+            return Err(invalid_field_err!("colorConv", "invalid rfx color conversion bits"));
         }
 
         let transform_bits = src.read_u8();
         if transform_bits != RFX_ICAP_TRANSFORM_BITS {
-            return Err(invalid_message_err!("transformBits", "invalid rfx transform bits"));
+            return Err(invalid_field_err!("transformBits", "invalid rfx transform bits"));
         }
 
         let entropy_bits = EntropyBits::from_u8(src.read_u8())
-            .ok_or_else(|| invalid_message_err!("entropyBits", "invalid rfx entropy bits"))?;
+            .ok_or_else(|| invalid_field_err!("entropyBits", "invalid rfx entropy bits"))?;
 
         Ok(RfxICap { flags, entropy_bits })
     }

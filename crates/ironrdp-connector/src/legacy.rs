@@ -1,8 +1,9 @@
 use std::borrow::Cow;
 
+use ironrdp_core::{decode, encode_vec, Decode, Encode, WriteBuf};
+use ironrdp_pdu::rdp;
 use ironrdp_pdu::rdp::headers::ServerDeactivateAll;
-use ironrdp_pdu::write_buf::WriteBuf;
-use ironrdp_pdu::{decode, encode_vec, rdp, PduDecode, PduEncode};
+use ironrdp_pdu::x224::X224;
 
 use crate::{ConnectorError, ConnectorErrorExt as _, ConnectorResult};
 
@@ -13,9 +14,9 @@ pub fn encode_send_data_request<T>(
     buf: &mut WriteBuf,
 ) -> ConnectorResult<usize>
 where
-    T: PduEncode,
+    T: Encode,
 {
-    let user_data = encode_vec(user_msg).map_err(ConnectorError::pdu)?;
+    let user_data = encode_vec(user_msg).map_err(ConnectorError::encode)?;
 
     let pdu = ironrdp_pdu::mcs::SendDataRequest {
         initiator_id,
@@ -23,7 +24,7 @@ where
         user_data: Cow::Owned(user_data),
     };
 
-    let written = ironrdp_pdu::encode_buf(&pdu, buf).map_err(ConnectorError::pdu)?;
+    let written = ironrdp_core::encode_buf(&X224(pdu), buf).map_err(ConnectorError::encode)?;
 
     Ok(written)
 }
@@ -38,10 +39,10 @@ pub struct SendDataIndicationCtx<'a> {
 impl<'a> SendDataIndicationCtx<'a> {
     pub fn decode_user_data<'de, T>(&self) -> ConnectorResult<T>
     where
-        T: PduDecode<'de>,
+        T: Decode<'de>,
         'a: 'de,
     {
-        let msg = decode::<T>(self.user_data).map_err(ConnectorError::pdu)?;
+        let msg = decode::<T>(self.user_data).map_err(ConnectorError::decode)?;
         Ok(msg)
     }
 }
@@ -49,9 +50,9 @@ impl<'a> SendDataIndicationCtx<'a> {
 pub fn decode_send_data_indication(src: &[u8]) -> ConnectorResult<SendDataIndicationCtx<'_>> {
     use ironrdp_pdu::mcs::McsMessage;
 
-    let mcs_msg = decode::<McsMessage<'_>>(src).map_err(ConnectorError::pdu)?;
+    let mcs_msg = decode::<X224<McsMessage<'_>>>(src).map_err(ConnectorError::decode)?;
 
-    match mcs_msg {
+    match mcs_msg.0 {
         McsMessage::SendDataIndication(msg) => {
             let Cow::Borrowed(user_data) = msg.user_data else {
                 unreachable!()
@@ -68,10 +69,10 @@ pub fn decode_send_data_indication(src: &[u8]) -> ConnectorResult<SendDataIndica
             "received disconnect provider ultimatum: {:?}",
             msg.reason
         )),
-        unexpected => Err(reason_err!(
+        _ => Err(reason_err!(
             "decode_send_data_indication",
             "unexpected MCS message: {}",
-            ironrdp_pdu::name(&unexpected)
+            ironrdp_core::name(&mcs_msg)
         )),
     }
 }
@@ -188,8 +189,4 @@ pub fn decode_io_channel(ctx: SendDataIndicationCtx<'_>) -> ConnectorResult<IoCh
             "received unexpected Share Control Pdu (expected Share Data Header or Server Deactivate All)"
         )),
     }
-}
-
-impl ironrdp_error::legacy::CatchAllKind for crate::ConnectorErrorKind {
-    const CATCH_ALL_VALUE: Self = crate::ConnectorErrorKind::General;
 }

@@ -5,7 +5,6 @@ use crate::SessionError;
 impl From<ironrdp_connector::ConnectorErrorKind> for crate::SessionErrorKind {
     fn from(value: ironrdp_connector::ConnectorErrorKind) -> Self {
         match value {
-            ironrdp_connector::ConnectorErrorKind::Pdu(e) => crate::SessionErrorKind::Pdu(e),
             ironrdp_connector::ConnectorErrorKind::Credssp(_) => panic!("unexpected"),
             ironrdp_connector::ConnectorErrorKind::AccessDenied => panic!("unexpected"),
             ironrdp_connector::ConnectorErrorKind::General => crate::SessionErrorKind::General,
@@ -17,8 +16,4 @@ impl From<ironrdp_connector::ConnectorErrorKind> for crate::SessionErrorKind {
 
 pub(crate) fn map_error(error: ironrdp_connector::ConnectorError) -> SessionError {
     error.into_other_kind()
-}
-
-impl ironrdp_error::legacy::CatchAllKind for crate::SessionErrorKind {
-    const CATCH_ALL_VALUE: Self = crate::SessionErrorKind::General;
 }

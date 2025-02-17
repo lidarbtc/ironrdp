@@ -1,10 +1,11 @@
 use std::borrow::Cow;
 
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::utils::{read_string_from_cursor, write_string_to_cursor, CharacterSet};
-use ironrdp_pdu::{
-    cast_int, ensure_size, impl_pdu_borrowing, invalid_message_err, IntoOwnedPdu, PduDecode, PduEncode, PduResult,
+use ironrdp_core::{
+    cast_int, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, IntoOwned, ReadCursor,
+    WriteCursor,
 };
+use ironrdp_pdu::impl_pdu_borrowing;
+use ironrdp_pdu::utils::{read_string_from_cursor, write_string_to_cursor, CharacterSet};
 
 use crate::pdu::PartialHeader;
 
@@ -16,10 +17,10 @@ pub struct ClientTemporaryDirectory<'a> {
 
 impl_pdu_borrowing!(ClientTemporaryDirectory<'_>, OwnedClientTemporaryDirectory);
 
-impl IntoOwnedPdu for ClientTemporaryDirectory<'_> {
+impl IntoOwned for ClientTemporaryDirectory<'_> {
     type Owned = OwnedClientTemporaryDirectory;
 
-    fn into_owned_pdu(self) -> Self::Owned {
+    fn into_owned(self) -> Self::Owned {
         OwnedClientTemporaryDirectory {
             path_buffer: Cow::Owned(self.path_buffer.into_owned()),
         }
@@ -33,7 +34,7 @@ impl ClientTemporaryDirectory<'_> {
     const INNER_SIZE: usize = Self::PATH_BUFFER_SIZE;
 
     /// Creates new `ClientTemporaryDirectory` and encodes given path to UTF-16 representation.
-    pub fn new(path: &str) -> PduResult<Self> {
+    pub fn new(path: &str) -> EncodeResult<Self> {
         let mut buffer = vec![0x00; Self::PATH_BUFFER_SIZE];
 
         {
@@ -47,16 +48,16 @@ impl ClientTemporaryDirectory<'_> {
     }
 
     /// Returns parsed temporary directory path.
-    pub fn temporary_directory_path(&self) -> PduResult<String> {
+    pub fn temporary_directory_path(&self) -> DecodeResult<String> {
         let mut cursor = ReadCursor::new(&self.path_buffer);
 
         read_string_from_cursor(&mut cursor, CharacterSet::Unicode, true)
-            .map_err(|_| invalid_message_err!("wszTempDir", "failed to decode temp dir path"))
+            .map_err(|_| invalid_field_err!("wszTempDir", "failed to decode temp dir path"))
     }
 }
 
-impl PduEncode for ClientTemporaryDirectory<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientTemporaryDirectory<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         let header = PartialHeader::new(cast_int!("dataLen", Self::INNER_SIZE)?);
         header.encode(dst)?;
 
@@ -75,8 +76,8 @@ impl PduEncode for ClientTemporaryDirectory<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientTemporaryDirectory<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientTemporaryDirectory<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let _header = PartialHeader::decode(src)?;
 
         ensure_size!(in: src, size: Self::INNER_SIZE);

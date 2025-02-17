@@ -1,9 +1,5 @@
 use bitflags::bitflags;
-
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    PduDecode, PduEncode, PduResult,
-};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanCodePdu {
@@ -17,8 +13,8 @@ impl ScanCodePdu {
     const FIXED_PART_SIZE: usize = 2 /* flags */ + 2 /* keycode */ + 2 /* padding */;
 }
 
-impl PduEncode for ScanCodePdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ScanCodePdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.flags.bits());
@@ -37,8 +33,8 @@ impl PduEncode for ScanCodePdu {
     }
 }
 
-impl<'de> PduDecode<'de> for ScanCodePdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ScanCodePdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let flags = KeyboardFlags::from_bits_truncate(src.read_u16());

@@ -95,14 +95,14 @@ const PRECONNECTION_PDU_V1_NULL_SIZE_BUF: [u8; 16] = [
 
 #[test]
 fn null_size() {
-    let e = ironrdp_pdu::decode::<PreconnectionBlob>(&PRECONNECTION_PDU_V1_NULL_SIZE_BUF)
+    let e = ironrdp_core::decode::<PreconnectionBlob>(&PRECONNECTION_PDU_V1_NULL_SIZE_BUF)
         .err()
         .unwrap();
 
     expect![[r#"
             Error {
                 context: "PreconnectionBlob",
-                kind: InvalidMessage {
+                kind: InvalidField {
                     field: "cbSize",
                     reason: "advertised size too small for Preconnection PDU V1",
                 },
@@ -121,20 +121,20 @@ const PRECONNECTION_PDU_V1_LARGE_SIZE_BUF: [u8; 16] = [
 
 #[test]
 fn truncated() {
-    let e = ironrdp_pdu::decode::<PreconnectionBlob>(&PRECONNECTION_PDU_V1_LARGE_SIZE_BUF)
+    let e = ironrdp_core::decode::<PreconnectionBlob>(&PRECONNECTION_PDU_V1_LARGE_SIZE_BUF)
         .err()
         .unwrap();
 
     expect![[r#"
-            Error {
-                context: "<ironrdp_pdu::pcb::PreconnectionBlob as ironrdp_pdu::PduDecode>::decode",
-                kind: NotEnoughBytes {
-                    received: 0,
-                    expected: 239,
-                },
-                source: None,
-            }
-        "#]]
+        Error {
+            context: "<ironrdp_pdu::pcb::PreconnectionBlob as ironrdp_core::decode::Decode>::decode",
+            kind: NotEnoughBytes {
+                received: 0,
+                expected: 239,
+            },
+            source: None,
+        }
+    "#]]
     .assert_debug_eq(&e);
 }
 
@@ -150,14 +150,14 @@ const PRECONNECTION_PDU_V2_LARGE_PAYLOAD_SIZE_BUF: [u8; 32] = [
 
 #[test]
 fn pcb_v2_string_too_big() {
-    let e = ironrdp_pdu::decode::<PreconnectionBlob>(&PRECONNECTION_PDU_V2_LARGE_PAYLOAD_SIZE_BUF)
+    let e = ironrdp_core::decode::<PreconnectionBlob>(&PRECONNECTION_PDU_V2_LARGE_PAYLOAD_SIZE_BUF)
         .err()
         .unwrap();
 
     expect![[r#"
             Error {
                 context: "PreconnectionBlob",
-                kind: InvalidMessage {
+                kind: InvalidField {
                     field: "cchPCB",
                     reason: "PCB string bigger than advertised size",
                 },

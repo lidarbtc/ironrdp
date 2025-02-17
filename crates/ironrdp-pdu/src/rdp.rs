@@ -1,14 +1,16 @@
 use std::io;
 
+use ironrdp_core::{
+    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 use thiserror::Error;
 
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::input::InputEventError;
 use crate::rdp::capability_sets::CapabilitySetsError;
 use crate::rdp::client_info::{ClientInfo, ClientInfoError};
 use crate::rdp::headers::{BasicSecurityHeader, BasicSecurityHeaderFlags, ShareControlPduType, ShareDataPduType};
 use crate::rdp::server_license::ServerLicenseError;
-use crate::{PduDecode, PduEncode, PduError, PduResult};
+use crate::PduError;
 
 pub mod capability_sets;
 pub mod client_info;
@@ -33,8 +35,8 @@ impl ClientInfoPdu {
     const FIXED_PART_SIZE: usize = BasicSecurityHeader::FIXED_PART_SIZE + ClientInfo::FIXED_PART_SIZE;
 }
 
-impl PduEncode for ClientInfoPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientInfoPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         self.security_header.encode(dst)?;
@@ -52,13 +54,13 @@ impl PduEncode for ClientInfoPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientInfoPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientInfoPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let security_header = BasicSecurityHeader::decode(src)?;
         if !security_header.flags.contains(BasicSecurityHeaderFlags::INFO_PKT) {
-            return Err(invalid_message_err!("securityHeader", "got invalid security header"));
+            return Err(invalid_field_err!("securityHeader", "got invalid security header"));
         }
 
         let client_info = ClientInfo::decode(src)?;
@@ -111,12 +113,5 @@ impl From<PduError> for RdpError {
 impl From<RdpError> for io::Error {
     fn from(e: RdpError) -> io::Error {
         io::Error::new(io::ErrorKind::Other, format!("RDP Connection Sequence error: {e}"))
-    }
-}
-
-#[cfg(feature = "std")]
-impl ironrdp_error::legacy::ErrorContext for RdpError {
-    fn context(&self) -> &'static str {
-        "RDP"
     }
 }

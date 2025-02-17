@@ -1,7 +1,9 @@
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    utils, PduDecode, PduEncode, PduResult,
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
 };
+
+use crate::utils;
 
 const DOMAIN_NAME_SIZE_FIELD_SIZE: usize = 4;
 const DOMAIN_NAME_SIZE_V1: usize = 52;
@@ -30,8 +32,8 @@ impl LogonInfoVersion1 {
         + ID_SESSION_SIZE;
 }
 
-impl PduEncode for LogonInfoVersion1 {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for LogonInfoVersion1 {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let mut domain_name_buffer = utils::to_utf16_bytes(self.logon_info.domain_name.as_ref());
@@ -62,13 +64,13 @@ impl PduEncode for LogonInfoVersion1 {
     }
 }
 
-impl<'de> PduDecode<'de> for LogonInfoVersion1 {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for LogonInfoVersion1 {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let domain_name_size: usize = cast_length!("domainNameSize", src.read_u32())?;
         if domain_name_size > DOMAIN_NAME_SIZE_V1 {
-            return Err(invalid_message_err!("domainNameSize", "invalid domain name size"));
+            return Err(invalid_field_err!("domainNameSize", "invalid domain name size"));
         }
 
         let domain_name =
@@ -76,7 +78,7 @@ impl<'de> PduDecode<'de> for LogonInfoVersion1 {
 
         let user_name_size: usize = cast_length!("userNameSize", src.read_u32())?;
         if user_name_size > USER_NAME_SIZE_V1 {
-            return Err(invalid_message_err!("userNameSize", "invalid user name size"));
+            return Err(invalid_field_err!("userNameSize", "invalid user name size"));
         }
 
         let user_name = utils::decode_string(src.read_slice(USER_NAME_SIZE_V1), utils::CharacterSet::Unicode, false)?;
@@ -104,8 +106,8 @@ impl LogonInfoVersion2 {
     const FIXED_PART_SIZE: usize = LOGON_INFO_V2_SIZE + LOGON_INFO_V2_PADDING_SIZE;
 }
 
-impl PduEncode for LogonInfoVersion2 {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for LogonInfoVersion2 {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(SAVE_SESSION_PDU_VERSION_ONE);
@@ -143,29 +145,29 @@ impl PduEncode for LogonInfoVersion2 {
     }
 }
 
-impl<'de> PduDecode<'de> for LogonInfoVersion2 {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for LogonInfoVersion2 {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let version = src.read_u16();
         if version != SAVE_SESSION_PDU_VERSION_ONE {
-            return Err(invalid_message_err!("version", "invalid logon version 2"));
+            return Err(invalid_field_err!("version", "invalid logon version 2"));
         }
 
         let size: usize = cast_length!("LogonInfoSize", src.read_u32())?;
         if size != LOGON_INFO_V2_SIZE {
-            return Err(invalid_message_err!("domainNameSize", "invalid logon info size"));
+            return Err(invalid_field_err!("domainNameSize", "invalid logon info size"));
         }
 
         let session_id = src.read_u32();
         let domain_name_size: usize = cast_length!("domainNameSize", src.read_u32())?;
         if domain_name_size > DOMAIN_NAME_SIZE_V2 {
-            return Err(invalid_message_err!("domainNameSize", "invalid domain name size"));
+            return Err(invalid_field_err!("domainNameSize", "invalid domain name size"));
         }
 
         let user_name_size: usize = cast_length!("userNameSize", src.read_u32())?;
         if user_name_size > USER_NAME_SIZE_V2 {
-            return Err(invalid_message_err!("userNameSize", "invalid user name size"));
+            return Err(invalid_field_err!("userNameSize", "invalid user name size"));
         }
 
         read_padding!(src, LOGON_INFO_V2_PADDING_SIZE);

@@ -9,11 +9,12 @@ pub use graphics_messages::{
     QueueDepth, ResetGraphicsPdu, SolidFillPdu, StartFramePdu, SurfaceToCachePdu, SurfaceToSurfacePdu, Timestamp,
     WireToSurface1Pdu, WireToSurface2Pdu,
 };
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive as _, ToPrimitive as _};
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServerPdu {
@@ -45,8 +46,8 @@ impl ServerPdu {
     const FIXED_PART_SIZE: usize = RDP_GFX_HEADER_SIZE;
 }
 
-impl PduEncode for ServerPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let buffer_length = self.size();
@@ -106,12 +107,12 @@ impl PduEncode for ServerPdu {
     }
 }
 
-impl<'a> PduDecode<'a> for ServerPdu {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for ServerPdu {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let pdu_type = ServerPduType::from_u16(src.read_u16())
-            .ok_or_else(|| invalid_message_err!("serverPduType", "invalid pdu type"))?;
+            .ok_or_else(|| invalid_field_err!("serverPduType", "invalid pdu type"))?;
         let _flags = src.read_u16();
         let pdu_length = cast_length!("pduLen", src.read_u32())?;
 
@@ -143,7 +144,7 @@ impl<'a> PduDecode<'a> for ServerPdu {
                 ServerPduType::MapSurfaceToScaledWindow => {
                     ServerPdu::MapSurfaceToScaledWindow(MapSurfaceToScaledWindowPdu::decode(src)?)
                 }
-                _ => return Err(invalid_message_err!("pduType", "invalid pdu type")),
+                _ => return Err(invalid_field_err!("pduType", "invalid pdu type")),
             };
             let buffer_length = pdu.size();
 
@@ -151,7 +152,7 @@ impl<'a> PduDecode<'a> for ServerPdu {
         };
 
         if buffer_length != pdu_length {
-            Err(invalid_message_err!("len", "invalid pdu length"))
+            Err(invalid_field_err!("len", "invalid pdu length"))
         } else {
             Ok(server_pdu)
         }
@@ -170,8 +171,8 @@ impl ClientPdu {
     const FIXED_PART_SIZE: usize = RDP_GFX_HEADER_SIZE;
 }
 
-impl PduEncode for ClientPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(ClientPduType::from(self).to_u16().unwrap());
@@ -197,10 +198,10 @@ impl PduEncode for ClientPdu {
     }
 }
 
-impl<'a> PduDecode<'a> for ClientPdu {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for ClientPdu {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         let pdu_type = ClientPduType::from_u16(src.read_u16())
-            .ok_or_else(|| invalid_message_err!("clientPduType", "invalid pdu type"))?;
+            .ok_or_else(|| invalid_field_err!("clientPduType", "invalid pdu type"))?;
         let _flags = src.read_u16();
         let pdu_length = cast_length!("bufferLen", src.read_u32())?;
 
@@ -209,11 +210,11 @@ impl<'a> PduDecode<'a> for ClientPdu {
             ClientPduType::CapabilitiesAdvertise => {
                 ClientPdu::CapabilitiesAdvertise(CapabilitiesAdvertisePdu::decode(src)?)
             }
-            _ => return Err(invalid_message_err!("pduType", "invalid pdu type")),
+            _ => return Err(invalid_field_err!("pduType", "invalid pdu type")),
         };
 
         if client_pdu.size() != pdu_length {
-            Err(invalid_message_err!("len", "invalid pdu length"))
+            Err(invalid_field_err!("len", "invalid pdu length"))
         } else {
             Ok(client_pdu)
         }

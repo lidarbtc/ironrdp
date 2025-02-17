@@ -2,9 +2,7 @@
 mod tests;
 
 use bitflags::bitflags;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 
 const SOUND_LENGTH: usize = 4;
 
@@ -26,8 +24,8 @@ impl Sound {
     const FIXED_PART_SIZE: usize = SOUND_LENGTH;
 }
 
-impl PduEncode for Sound {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Sound {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.flags.bits());
@@ -45,8 +43,8 @@ impl PduEncode for Sound {
     }
 }
 
-impl<'de> PduDecode<'de> for Sound {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Sound {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let flags = SoundFlags::from_bits_truncate(src.read_u16());

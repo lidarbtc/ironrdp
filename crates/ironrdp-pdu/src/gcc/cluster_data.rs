@@ -1,12 +1,12 @@
 use std::io;
 
 use bitflags::bitflags;
+use ironrdp_core::{
+    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive as _, ToPrimitive as _};
 use thiserror::Error;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
 
 const REDIRECTION_VERSION_MASK: u32 = 0x0000_003C;
 
@@ -26,8 +26,8 @@ impl ClientClusterData {
     const FIXED_PART_SIZE: usize = FLAGS_SIZE + REDIRECTED_SESSION_ID_SIZE;
 }
 
-impl PduEncode for ClientClusterData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientClusterData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         let flags_with_version = self.flags.bits() | (self.redirection_version.to_u32().unwrap() << 2);
@@ -47,18 +47,18 @@ impl PduEncode for ClientClusterData {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientClusterData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientClusterData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let flags_with_version = src.read_u32();
         let redirected_session_id = src.read_u32();
 
         let flags = RedirectionFlags::from_bits(flags_with_version & !REDIRECTION_VERSION_MASK)
-            .ok_or_else(|| invalid_message_err!("flags", "invalid redirection flags"))?;
+            .ok_or_else(|| invalid_field_err!("flags", "invalid redirection flags"))?;
         let redirection_version =
             RedirectionVersion::from_u8(((flags_with_version & REDIRECTION_VERSION_MASK) >> 2) as u8)
-                .ok_or_else(|| invalid_message_err!("redirVersion", "invalid redirection version"))?;
+                .ok_or_else(|| invalid_field_err!("redirVersion", "invalid redirection version"))?;
 
         Ok(Self {
             flags,

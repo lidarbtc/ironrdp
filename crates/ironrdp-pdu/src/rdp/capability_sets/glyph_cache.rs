@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod tests;
 
+use ironrdp_core::{
+    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
 
 pub const GLYPH_CACHE_NUM: usize = 10;
 
@@ -32,8 +32,8 @@ impl CacheDefinition {
     const FIXED_PART_SIZE: usize = CACHE_DEFINITION_LENGTH;
 }
 
-impl PduEncode for CacheDefinition {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for CacheDefinition {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.entries);
@@ -51,8 +51,8 @@ impl PduEncode for CacheDefinition {
     }
 }
 
-impl<'de> PduDecode<'de> for CacheDefinition {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for CacheDefinition {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let entries = src.read_u16();
@@ -75,8 +75,8 @@ impl GlyphCache {
     const FIXED_PART_SIZE: usize = GLYPH_CACHE_LENGTH;
 }
 
-impl PduEncode for GlyphCache {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for GlyphCache {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         for glyph in self.glyph_cache.iter() {
@@ -100,8 +100,8 @@ impl PduEncode for GlyphCache {
     }
 }
 
-impl<'de> PduDecode<'de> for GlyphCache {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for GlyphCache {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let mut glyph_cache = [CacheDefinition::default(); GLYPH_CACHE_NUM];
@@ -112,7 +112,7 @@ impl<'de> PduDecode<'de> for GlyphCache {
 
         let frag_cache = CacheDefinition::decode(src)?;
         let glyph_support_level = GlyphSupportLevel::from_u16(src.read_u16())
-            .ok_or_else(|| invalid_message_err!("glyphSupport", "invalid glyph support level"))?;
+            .ok_or_else(|| invalid_field_err!("glyphSupport", "invalid glyph support level"))?;
         let _padding = src.read_u16();
 
         Ok(GlyphCache {

@@ -1,12 +1,10 @@
+use ironrdp_core::{decode, impl_as_any};
 use ironrdp_dvc::{DvcMessage, DvcProcessor, DvcServerProcessor};
-use ironrdp_pdu::{decode, PduResult};
-use ironrdp_svc::impl_as_any;
+use ironrdp_pdu::{decode_err, PduResult};
 use tracing::debug;
 
-use crate::{
-    pdu::{DisplayControlCapabilities, DisplayControlMonitorLayout, DisplayControlPdu},
-    CHANNEL_NAME,
-};
+use crate::pdu::{DisplayControlCapabilities, DisplayControlMonitorLayout, DisplayControlPdu};
+use crate::CHANNEL_NAME;
 
 pub trait DisplayControlHandler: Send {
     fn monitor_layout(&self, layout: DisplayControlMonitorLayout) {
@@ -34,13 +32,15 @@ impl DvcProcessor for DisplayControlServer {
     }
 
     fn start(&mut self, _channel_id: u32) -> PduResult<Vec<DvcMessage>> {
-        let pdu: DisplayControlPdu = DisplayControlCapabilities::new(1, 3840, 2400)?.into();
+        let pdu: DisplayControlPdu = DisplayControlCapabilities::new(1, 3840, 2400)
+            .map_err(|e| decode_err!(e))?
+            .into();
 
         Ok(vec![Box::new(pdu)])
     }
 
     fn process(&mut self, _channel_id: u32, payload: &[u8]) -> PduResult<Vec<DvcMessage>> {
-        match decode(payload)? {
+        match decode(payload).map_err(|e| decode_err!(e))? {
             DisplayControlPdu::MonitorLayout(layout) => self.handler.monitor_layout(layout),
             DisplayControlPdu::Caps(caps) => {
                 debug!(?caps);

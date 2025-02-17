@@ -1,11 +1,11 @@
 use expect_test::expect;
-use ironrdp_pdu::{decode, PduEncode};
-use ironrdp_pdu::{encode_vec, mcs::*};
+use ironrdp_core::{decode, encode_vec, Encode};
+use ironrdp_pdu::mcs::*;
 use ironrdp_testsuite_core::mcs::*;
 use ironrdp_testsuite_core::mcs_encode_decode_test;
 
-fn mcs_decode<'de, T: McsPdu<'de>>(src: &'de [u8]) -> ironrdp_pdu::PduResult<T> {
-    let mut cursor = ironrdp_pdu::cursor::ReadCursor::new(src);
+fn mcs_decode<'de, T: McsPdu<'de>>(src: &'de [u8]) -> ironrdp_core::DecodeResult<T> {
+    let mut cursor = ironrdp_core::ReadCursor::new(src);
     T::mcs_body_decode(&mut cursor, src.len())
 }
 
@@ -18,7 +18,7 @@ fn invalid_domain_mcspdu() {
     expect![[r#"
         Error {
             context: "McsMessage",
-            kind: InvalidMessage {
+            kind: InvalidField {
                 field: "domain-mcspdu",
                 reason: "unexpected application tag for CHOICE",
             },

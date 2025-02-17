@@ -4,7 +4,8 @@ use self::ffi::PerformanceFlagsType;
 
 #[diplomat::bridge]
 pub mod ffi {
-    use ironrdp::{connector::Credentials, pdu::rdp::capability_sets::MajorPlatformType};
+    use ironrdp::connector::Credentials;
+    use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 
     use crate::error::ffi::IronRdpError;
 
@@ -191,9 +192,12 @@ pub mod ffi {
 
                 no_server_pointer: self.no_server_pointer.unwrap_or(false),
                 autologon: self.autologon.unwrap_or(false),
+                request_data: None,
                 pointer_software_rendering: self.pointer_software_rendering.unwrap_or(false),
                 performance_flags: self.performance_flags.ok_or("performance flag is missing")?,
                 desktop_scale_factor: 0,
+                hardware_id: None,
+                license_cache: None,
             };
             tracing::debug!(config=?inner_config, "Built config");
             Ok(Box::new(Config(inner_config)))

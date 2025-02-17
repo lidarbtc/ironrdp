@@ -1,6 +1,6 @@
 [package]
 name = "ironrdp-session"
-version = "0.1.0"
+version = "0.2.2"
 readme = "README.md"
 description = "State machines to drive an RDP session"
 edition.workspace = true
@@ -24,6 +24,7 @@ ironrdp-graphics.workspace = true
 ironrdp-pdu = { workspace = true, features = ["std"] }
 ironrdp-displaycontrol.workspace = true
 tracing.workspace = true
+ironrdp-core.workspace = true
 
 [lints]
 workspace = true

@@ -1,18 +1,23 @@
 use std::io;
 
 use bitflags::bitflags;
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, invalid_field_err, unsupported_value_err, Decode, DecodeResult, Encode,
+    EncodeResult, ReadCursor, WriteCursor,
+};
 use md5::Digest;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 use thiserror::Error;
 
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::rdp::headers::{BasicSecurityHeader, BasicSecurityHeaderFlags, BASIC_SECURITY_HEADER_SIZE};
-use crate::{PduDecode, PduEncode, PduError, PduResult};
+pub use crate::rdp::server_license::client_license_info::ClientLicenseInfo;
+use crate::PduError;
 
 #[cfg(test)]
 mod tests;
 
+mod client_license_info;
 mod client_new_license_request;
 mod client_platform_challenge_response;
 mod licensing_error_message;
@@ -27,7 +32,7 @@ pub use self::client_platform_challenge_response::{
 pub use self::licensing_error_message::{LicenseErrorCode, LicensingErrorMessage, LicensingStateTransition};
 pub use self::server_license_request::{cert, ProductInfo, Scope, ServerCertificate, ServerLicenseRequest};
 pub use self::server_platform_challenge::ServerPlatformChallenge;
-pub use self::server_upgrade_license::{NewLicenseInformation, ServerUpgradeLicense};
+pub use self::server_upgrade_license::{LicenseInformation, ServerUpgradeLicense};
 
 pub const PREAMBLE_SIZE: usize = 4;
 pub const PREMASTER_SECRET_SIZE: usize = 48;
@@ -67,8 +72,8 @@ impl LicenseHeader {
     const FIXED_PART_SIZE: usize = PREAMBLE_SIZE + BASIC_SECURITY_HEADER_SIZE;
 }
 
-impl PduEncode for LicenseHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for LicenseHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         self.security_header.encode(dst)?;
@@ -91,30 +96,30 @@ impl PduEncode for LicenseHeader {
     }
 }
 
-impl<'de> PduDecode<'de> for LicenseHeader {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for LicenseHeader {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let security_header = BasicSecurityHeader::decode(src)?;
 
         if !security_header.flags.contains(BasicSecurityHeaderFlags::LICENSE_PKT) {
-            return Err(invalid_message_err!(
+            return Err(invalid_field_err!(
                 "securityHeaderFlags",
                 "invalid security header flags"
             ));
         }
 
         let preamble_message_type = PreambleType::from_u8(src.read_u8())
-            .ok_or_else(|| invalid_message_err!("preambleType", "invalid license type"))?;
+            .ok_or_else(|| invalid_field_err!("preambleType", "invalid license type"))?;
 
         let flags_with_version = src.read_u8();
         let preamble_message_size = src.read_u16();
 
         let preamble_flags = PreambleFlags::from_bits(flags_with_version & !PROTOCOL_VERSION_MASK)
-            .ok_or_else(|| invalid_message_err!("preambleFlags", "Got invalid flags field"))?;
+            .ok_or_else(|| invalid_field_err!("preambleFlags", "Got invalid flags field"))?;
 
         let preamble_version = PreambleVersion::from_u8(flags_with_version & PROTOCOL_VERSION_MASK)
-            .ok_or_else(|| invalid_message_err!("preambleVersion", "Got invalid version in the flags filed"))?;
+            .ok_or_else(|| invalid_field_err!("preambleVersion", "Got invalid version in the flags filed"))?;
 
         Ok(Self {
             security_header,
@@ -264,13 +269,6 @@ impl From<LicensingErrorMessage> for ServerLicenseError {
     }
 }
 
-#[cfg(feature = "std")]
-impl ironrdp_error::legacy::ErrorContext for ServerLicenseError {
-    fn context(&self) -> &'static str {
-        "server license"
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub struct BlobHeader {
     pub blob_type: BlobType,
@@ -287,8 +285,8 @@ impl BlobHeader {
     }
 }
 
-impl PduEncode for BlobHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BlobHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.blob_type.0);
@@ -306,8 +304,8 @@ impl PduEncode for BlobHeader {
     }
 }
 
-impl<'de> PduDecode<'de> for BlobHeader {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for BlobHeader {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let blob_type = BlobType(src.read_u16());
@@ -345,6 +343,7 @@ fn compute_mac_data(mac_salt_key: &[u8], data: &[u8]) -> Vec<u8> {
 #[derive(Debug, PartialEq)]
 pub enum LicensePdu {
     ClientNewLicenseRequest(ClientNewLicenseRequest),
+    ClientLicenseInfo(ClientLicenseInfo),
     ClientPlatformChallengeResponse(ClientPlatformChallengeResponse),
     ServerLicenseRequest(ServerLicenseRequest),
     ServerPlatformChallenge(ServerPlatformChallenge),
@@ -352,8 +351,8 @@ pub enum LicensePdu {
     LicensingErrorMessage(LicensingErrorMessage),
 }
 
-impl<'de> PduDecode<'de> for LicensePdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for LicensePdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let license_header = LicenseHeader::decode(src)?;
 
         match license_header.preamble_message_type {
@@ -362,7 +361,7 @@ impl<'de> PduDecode<'de> for LicensePdu {
             PreambleType::NewLicense | PreambleType::UpgradeLicense => {
                 Ok(ServerUpgradeLicense::decode(license_header, src)?.into())
             }
-            PreambleType::LicenseInfo => Err(unsupported_pdu_err!(
+            PreambleType::LicenseInfo => Err(unsupported_value_err!(
                 "LicensePdu::LicenseInfo",
                 "LicenseInfo is not supported".to_owned()
             )),
@@ -375,10 +374,11 @@ impl<'de> PduDecode<'de> for LicensePdu {
     }
 }
 
-impl PduEncode for LicensePdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for LicensePdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         match self {
             Self::ClientNewLicenseRequest(ref pdu) => pdu.encode(dst),
+            Self::ClientLicenseInfo(ref pdu) => pdu.encode(dst),
             Self::ClientPlatformChallengeResponse(ref pdu) => pdu.encode(dst),
             Self::ServerLicenseRequest(ref pdu) => pdu.encode(dst),
             Self::ServerPlatformChallenge(ref pdu) => pdu.encode(dst),
@@ -390,6 +390,7 @@ impl PduEncode for LicensePdu {
     fn name(&self) -> &'static str {
         match self {
             Self::ClientNewLicenseRequest(pdu) => pdu.name(),
+            Self::ClientLicenseInfo(pdu) => pdu.name(),
             Self::ClientPlatformChallengeResponse(pdu) => pdu.name(),
             Self::ServerLicenseRequest(pdu) => pdu.name(),
             Self::ServerPlatformChallenge(pdu) => pdu.name(),
@@ -401,6 +402,7 @@ impl PduEncode for LicensePdu {
     fn size(&self) -> usize {
         match self {
             Self::ClientNewLicenseRequest(pdu) => pdu.size(),
+            Self::ClientLicenseInfo(pdu) => pdu.size(),
             Self::ClientPlatformChallengeResponse(pdu) => pdu.size(),
             Self::ServerLicenseRequest(pdu) => pdu.size(),
             Self::ServerPlatformChallenge(pdu) => pdu.size(),
@@ -413,6 +415,12 @@ impl PduEncode for LicensePdu {
 impl From<ClientNewLicenseRequest> for LicensePdu {
     fn from(pdu: ClientNewLicenseRequest) -> Self {
         Self::ClientNewLicenseRequest(pdu)
+    }
+}
+
+impl From<ClientLicenseInfo> for LicensePdu {
+    fn from(pdu: ClientLicenseInfo) -> Self {
+        Self::ClientLicenseInfo(pdu)
     }
 }
 

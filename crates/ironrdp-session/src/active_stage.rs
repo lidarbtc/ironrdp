@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use ironrdp_connector::connection_activation::ConnectionActivationSequence;
 use ironrdp_connector::ConnectionResult;
+use ironrdp_core::WriteBuf;
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::{DrdynvcClient, DvcProcessor, DynamicVirtualChannel};
 use ironrdp_graphics::pointer::DecodedPointer;
 use ironrdp_pdu::geometry::InclusiveRectangle;
 use ironrdp_pdu::input::fast_path::{FastPathInput, FastPathInputEvent};
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
-use ironrdp_pdu::write_buf::WriteBuf;
 use ironrdp_pdu::{mcs, Action};
 use ironrdp_svc::{SvcProcessor, SvcProcessorMessages};
 
@@ -68,7 +68,7 @@ impl ActiveStage {
         // Encoding fastpath response frame
         // PERF: unnecessary copy
         let fastpath_input = FastPathInput(events.to_vec());
-        let frame = ironrdp_pdu::encode_vec(&fastpath_input).map_err(SessionError::pdu)?;
+        let frame = ironrdp_core::encode_vec(&fastpath_input).map_err(SessionError::encode)?;
         output.push(ActiveStageOutput::ResponseFrame(frame));
 
         // If pointer rendering is disabled - we can skip the rest
@@ -230,7 +230,7 @@ impl ActiveStage {
                     physical_dims,
                 ) {
                     Ok(messages) => messages,
-                    Err(e) => return Some(Err(SessionError::pdu(e))),
+                    Err(e) => return Some(Err(SessionError::encode(e))),
                 };
 
                 return Some(
@@ -265,14 +265,17 @@ impl TryFrom<x224::ProcessorOutput> for ActiveStageOutput {
     fn try_from(value: x224::ProcessorOutput) -> Result<Self, Self::Error> {
         match value {
             x224::ProcessorOutput::ResponseFrame(frame) => Ok(Self::ResponseFrame(frame)),
-            x224::ProcessorOutput::Disconnect(reason) => {
-                let reason = match reason {
-                    mcs::DisconnectReason::UserRequested => GracefulDisconnectReason::UserInitiated,
-                    mcs::DisconnectReason::ProviderInitiated => GracefulDisconnectReason::ServerInitiated,
-                    other => GracefulDisconnectReason::Other(other.description()),
+            x224::ProcessorOutput::Disconnect(desc) => {
+                let desc = match desc {
+                    x224::DisconnectDescription::McsDisconnect(reason) => match reason {
+                        mcs::DisconnectReason::ProviderInitiated => GracefulDisconnectReason::ServerInitiated,
+                        mcs::DisconnectReason::UserRequested => GracefulDisconnectReason::UserInitiated,
+                        other => GracefulDisconnectReason::Other(other.description().to_owned()),
+                    },
+                    x224::DisconnectDescription::ErrorInfo(info) => GracefulDisconnectReason::Other(info.description()),
                 };
 
-                Ok(Self::Terminate(reason))
+                Ok(Self::Terminate(desc))
             }
             x224::ProcessorOutput::DeactivateAll(cas) => Ok(Self::DeactivateAll(cas)),
         }
@@ -281,25 +284,25 @@ impl TryFrom<x224::ProcessorOutput> for ActiveStageOutput {
 
 /// Reasons for graceful disconnect. This type provides GUI-friendly descriptions for
 /// disconnect reasons.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum GracefulDisconnectReason {
     UserInitiated,
     ServerInitiated,
-    Other(&'static str),
+    Other(String),
 }
 
 impl GracefulDisconnectReason {
-    pub fn description(&self) -> &'static str {
+    pub fn description(&self) -> String {
         match self {
-            GracefulDisconnectReason::UserInitiated => "user initiated disconnect",
-            GracefulDisconnectReason::ServerInitiated => "server initiated disconnect",
-            GracefulDisconnectReason::Other(description) => description,
+            GracefulDisconnectReason::UserInitiated => "user initiated disconnect".to_owned(),
+            GracefulDisconnectReason::ServerInitiated => "server initiated disconnect".to_owned(),
+            GracefulDisconnectReason::Other(description) => description.clone(),
         }
     }
 }
 
 impl core::fmt::Display for GracefulDisconnectReason {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.description())
+        f.write_str(&self.description())
     }
 }

@@ -1,6 +1,6 @@
+use core::time::Duration;
 use std::collections::HashSet;
 use std::sync::mpsc;
-use std::time::Duration;
 
 use ironrdp_cliprdr::backend::{ClipboardMessage, ClipboardMessageProxy};
 use ironrdp_cliprdr::pdu::{ClipboardFormat, ClipboardFormatId, FormatDataRequest, FormatDataResponse};
@@ -9,7 +9,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::GetClipboardOwner;
 use windows::Win32::UI::Shell::DefSubclassProc;
 use windows::Win32::UI::WindowsAndMessaging::{
-    KillTimer, SetTimer, WA_INACTIVE, WM_ACTIVATE, WM_CLIPBOARDUPDATE, WM_DESTROY, WM_RENDERALLFORMATS,
+    KillTimer, SetTimer, WA_INACTIVE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLIPBOARDUPDATE, WM_DESTROY, WM_RENDERALLFORMATS,
     WM_RENDERFORMAT, WM_TIMER,
 };
 
@@ -165,7 +165,7 @@ impl WinClipboardImpl {
             }
         };
 
-        let formats = std::mem::take(&mut self.available_formats_on_remote);
+        let formats = core::mem::take(&mut self.available_formats_on_remote);
 
         // Clearing clipboard is not required, just render all available formats
 
@@ -328,7 +328,7 @@ pub(crate) unsafe extern "system" fn clipboard_subproc(
 
     match msg {
         // We need to keep track of window state to distinguish between local and remote copy
-        WM_ACTIVATE => ctx.window_is_active = wparam.0 != WA_INACTIVE as usize, // `as` conversion is fine for constants
+        WM_ACTIVATE | WM_ACTIVATEAPP => ctx.window_is_active = wparam.0 != WA_INACTIVE as usize, // `as` conversion is fine for constants
         // Sent by the OS when OS clipboard content is changed
         WM_CLIPBOARDUPDATE => {
             // SAFETY: `GetClipboardOwner` is always safe to call.

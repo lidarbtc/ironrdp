@@ -17,9 +17,10 @@ pub use self::lock::*;
 
 #[rustfmt::skip]
 use bitflags::bitflags;
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::{ensure_fixed_part_size, invalid_message_err, PduDecode, PduEncode, PduResult};
-use ironrdp_svc::SvcPduEncode;
+use ironrdp_core::{
+    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
+use ironrdp_svc::SvcEncode;
 
 const MSG_TYPE_MONITOR_READY: u16 = 0x0001;
 const MSG_TYPE_FORMAT_LIST: u16 = 0x0002;
@@ -64,8 +65,8 @@ impl PartialHeader {
     }
 }
 
-impl<'de> PduDecode<'de> for PartialHeader {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for PartialHeader {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let message_flags = ClipboardPduFlags::from_bits_truncate(src.read_u16());
@@ -78,8 +79,8 @@ impl<'de> PduDecode<'de> for PartialHeader {
     }
 }
 
-impl PduEncode for PartialHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for PartialHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.message_flags.bits());
@@ -134,8 +135,8 @@ impl ClipboardPdu<'_> {
     }
 }
 
-impl PduEncode for ClipboardPdu<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClipboardPdu<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         let write_empty_pdu = |dst: &mut WriteCursor<'_>| {
@@ -216,13 +217,13 @@ impl PduEncode for ClipboardPdu<'_> {
     }
 }
 
-impl SvcPduEncode for ClipboardPdu<'_> {}
+impl SvcEncode for ClipboardPdu<'_> {}
 
-impl<'de> PduDecode<'de> for ClipboardPdu<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClipboardPdu<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
-        let read_empty_pdu = |src: &mut ReadCursor<'de>| -> PduResult<()> {
+        let read_empty_pdu = |src: &mut ReadCursor<'de>| -> DecodeResult<()> {
             let _header = PartialHeader::decode(src)?;
             Ok(())
         };
@@ -242,7 +243,7 @@ impl<'de> PduDecode<'de> for ClipboardPdu<'de> {
             MSG_TYPE_FILE_CONTENTS_RESPONSE => ClipboardPdu::FileContentsResponse(FileContentsResponse::decode(src)?),
             MSG_TYPE_LOCK_CLIPDATA => ClipboardPdu::LockData(LockDataId::decode(src)?),
             MSG_TYPE_UNLOCK_CLIPDATA => ClipboardPdu::UnlockData(LockDataId::decode(src)?),
-            _ => return Err(invalid_message_err!("msgType", "Unknown clipboard PDU type")),
+            _ => return Err(invalid_field_err!("msgType", "Unknown clipboard PDU type")),
         };
 
         Ok(pdu)

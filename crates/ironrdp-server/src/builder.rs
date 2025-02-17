@@ -25,6 +25,7 @@ pub struct WantsDisplay {
 pub struct BuilderDone {
     addr: SocketAddr,
     security: RdpServerSecurity,
+    with_remote_fx: bool,
     handler: Box<dyn RdpServerInputHandler>,
     display: Box<dyn RdpServerDisplay>,
     cliprdr_factory: Option<Box<dyn CliprdrServerFactory>>,
@@ -74,6 +75,15 @@ impl RdpServerBuilder<WantsSecurity> {
             },
         }
     }
+
+    pub fn with_hybrid(self, acceptor: impl Into<TlsAcceptor>, pub_key: Vec<u8>) -> RdpServerBuilder<WantsHandler> {
+        RdpServerBuilder {
+            state: WantsHandler {
+                addr: self.state.addr,
+                security: RdpServerSecurity::Hybrid((acceptor.into(), pub_key)),
+            },
+        }
+    }
 }
 
 impl RdpServerBuilder<WantsHandler> {
@@ -114,6 +124,7 @@ impl RdpServerBuilder<WantsDisplay> {
                 display: Box::new(display),
                 sound_factory: None,
                 cliprdr_factory: None,
+                with_remote_fx: true,
             },
         }
     }
@@ -127,6 +138,7 @@ impl RdpServerBuilder<WantsDisplay> {
                 display: Box::new(NoopDisplay),
                 sound_factory: None,
                 cliprdr_factory: None,
+                with_remote_fx: true,
             },
         }
     }
@@ -143,11 +155,17 @@ impl RdpServerBuilder<BuilderDone> {
         self
     }
 
+    pub fn with_remote_fx(mut self, enabled: bool) -> Self {
+        self.state.with_remote_fx = enabled;
+        self
+    }
+
     pub fn build(self) -> RdpServer {
         RdpServer::new(
             RdpServerOptions {
                 addr: self.state.addr,
                 security: self.state.security,
+                with_remote_fx: self.state.with_remote_fx,
             },
             self.state.handler,
             self.state.display,
@@ -169,7 +187,7 @@ struct NoopDisplayUpdates;
 #[async_trait::async_trait]
 impl RdpServerDisplayUpdates for NoopDisplayUpdates {
     async fn next_update(&mut self) -> Option<DisplayUpdate> {
-        let () = std::future::pending().await;
+        let () = core::future::pending().await;
         unreachable!()
     }
 }

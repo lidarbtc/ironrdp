@@ -1,17 +1,20 @@
-use std::any::TypeId;
-use std::mem;
+use core::mem;
 
 use ironrdp_connector::{
     encode_x224_packet, reason_err, ConnectorError, ConnectorErrorExt, ConnectorResult, DesktopSize, Sequence, State,
     Written,
 };
+use ironrdp_core::{decode, WriteBuf};
 use ironrdp_pdu as pdu;
+use ironrdp_pdu::nego::SecurityProtocol;
+use ironrdp_pdu::x224::X224;
 use ironrdp_svc::{StaticChannelSet, SvcServerProcessor};
 use pdu::rdp::capability_sets::CapabilitySet;
+use pdu::rdp::client_info::Credentials;
 use pdu::rdp::headers::ShareControlPdu;
+use pdu::rdp::server_error_info::{ErrorInfo, ProtocolIndependentCode, ServerSetErrorInfoPdu};
 use pdu::rdp::server_license::{LicensePdu, LicensingErrorMessage};
-use pdu::write_buf::WriteBuf;
-use pdu::{decode, gcc, mcs, nego, rdp};
+use pdu::{gcc, mcs, nego, rdp};
 
 use super::channel_connection::ChannelConnectionSequence;
 use super::finalization::FinalizationSequence;
@@ -21,14 +24,16 @@ const IO_CHANNEL_ID: u16 = 1003;
 const USER_CHANNEL_ID: u16 = 1002;
 
 pub struct Acceptor {
-    state: AcceptorState,
-    security: nego::SecurityProtocol,
+    pub(crate) state: AcceptorState,
+    security: SecurityProtocol,
     io_channel_id: u16,
     user_channel_id: u16,
     desktop_size: DesktopSize,
     server_capabilities: Vec<CapabilitySet>,
     static_channels: StaticChannelSet,
     saved_for_reactivation: AcceptorState,
+    pub(crate) creds: Option<Credentials>,
+    reactivation: bool,
 }
 
 #[derive(Debug)]
@@ -38,10 +43,16 @@ pub struct AcceptorResult {
     pub input_events: Vec<Vec<u8>>,
     pub user_channel_id: u16,
     pub io_channel_id: u16,
+    pub reactivation: bool,
 }
 
 impl Acceptor {
-    pub fn new(security: nego::SecurityProtocol, desktop_size: DesktopSize, capabilities: Vec<CapabilitySet>) -> Self {
+    pub fn new(
+        security: SecurityProtocol,
+        desktop_size: DesktopSize,
+        capabilities: Vec<CapabilitySet>,
+        creds: Option<Credentials>,
+    ) -> Self {
         Self {
             security,
             state: AcceptorState::InitiationWaitRequest,
@@ -51,10 +62,16 @@ impl Acceptor {
             server_capabilities: capabilities,
             static_channels: StaticChannelSet::new(),
             saved_for_reactivation: Default::default(),
+            creds,
+            reactivation: false,
         }
     }
 
-    pub fn new_deactivation_reactivation(mut consumed: Acceptor, desktop_size: DesktopSize) -> Self {
+    pub fn new_deactivation_reactivation(
+        mut consumed: Acceptor,
+        static_channels: StaticChannelSet,
+        desktop_size: DesktopSize,
+    ) -> Self {
         let AcceptorState::CapabilitiesSendServer {
             early_capability,
             channels,
@@ -84,8 +101,10 @@ impl Acceptor {
             io_channel_id: consumed.io_channel_id,
             desktop_size,
             server_capabilities: consumed.server_capabilities,
-            static_channels: StaticChannelSet::new(),
+            static_channels,
             saved_for_reactivation,
+            creds: consumed.creds,
+            reactivation: true,
         }
     }
 
@@ -93,25 +112,31 @@ impl Acceptor {
     where
         T: SvcServerProcessor + 'static,
     {
-        let channel_name = channel.channel_name();
-
         self.static_channels.insert(channel);
-
-        // Restore channel id if it was already attached.
-        if let AcceptorState::CapabilitiesSendServer { channels, .. } = &self.state {
-            for (channel_id, c) in channels {
-                if c.name == channel_name {
-                    self.static_channels.attach_channel_id(TypeId::of::<T>(), *channel_id);
-                }
-            }
-        }
     }
 
-    pub fn reached_security_upgrade(&self) -> Option<nego::SecurityProtocol> {
+    pub fn reached_security_upgrade(&self) -> Option<SecurityProtocol> {
         match self.state {
             AcceptorState::SecurityUpgrade { .. } => Some(self.security),
             _ => None,
         }
+    }
+
+    pub fn mark_security_upgrade_as_done(&mut self) {
+        assert!(self.reached_security_upgrade().is_some());
+        self.step(&[], &mut WriteBuf::new()).expect("transition to next state");
+        debug_assert!(self.reached_security_upgrade().is_none());
+    }
+
+    pub fn should_perform_credssp(&self) -> bool {
+        matches!(self.state, AcceptorState::Credssp { .. })
+    }
+
+    pub fn mark_credssp_as_done(&mut self) {
+        assert!(self.should_perform_credssp());
+        let res = self.step(&[], &mut WriteBuf::new()).expect("transition to next state");
+        debug_assert!(!self.should_perform_credssp());
+        assert_eq!(res, Written::Nothing);
     }
 
     pub fn get_result(&mut self) -> Option<AcceptorResult> {
@@ -126,6 +151,7 @@ impl Acceptor {
                 input_events,
                 user_channel_id: self.user_channel_id,
                 io_channel_id: self.io_channel_id,
+                reactivation: self.reactivation,
             }),
             previous_state => {
                 self.state = previous_state;
@@ -142,29 +168,39 @@ pub enum AcceptorState {
 
     InitiationWaitRequest,
     InitiationSendConfirm {
-        requested_protocol: nego::SecurityProtocol,
+        requested_protocol: SecurityProtocol,
     },
     SecurityUpgrade {
-        requested_protocol: nego::SecurityProtocol,
+        requested_protocol: SecurityProtocol,
+        protocol: SecurityProtocol,
+    },
+    Credssp {
+        requested_protocol: SecurityProtocol,
+        protocol: SecurityProtocol,
     },
     BasicSettingsWaitInitial {
-        requested_protocol: nego::SecurityProtocol,
+        requested_protocol: SecurityProtocol,
+        protocol: SecurityProtocol,
     },
     BasicSettingsSendResponse {
-        requested_protocol: nego::SecurityProtocol,
+        requested_protocol: SecurityProtocol,
+        protocol: SecurityProtocol,
         early_capability: Option<gcc::ClientEarlyCapabilityFlags>,
         channels: Vec<(u16, Option<gcc::ChannelDef>)>,
     },
     ChannelConnection {
+        protocol: SecurityProtocol,
         early_capability: Option<gcc::ClientEarlyCapabilityFlags>,
         channels: Vec<(u16, gcc::ChannelDef)>,
         connection: ChannelConnectionSequence,
     },
     RdpSecurityCommencement {
+        protocol: SecurityProtocol,
         early_capability: Option<gcc::ClientEarlyCapabilityFlags>,
         channels: Vec<(u16, gcc::ChannelDef)>,
     },
     SecureSettingsExchange {
+        protocol: SecurityProtocol,
         early_capability: Option<gcc::ClientEarlyCapabilityFlags>,
         channels: Vec<(u16, gcc::ChannelDef)>,
     },
@@ -201,6 +237,7 @@ impl State for AcceptorState {
             Self::InitiationWaitRequest => "InitiationWaitRequest",
             Self::InitiationSendConfirm { .. } => "InitiationSendConfirm",
             Self::SecurityUpgrade { .. } => "SecurityUpgrade",
+            Self::Credssp { .. } => "Credssp",
             Self::BasicSettingsWaitInitial { .. } => "BasicSettingsWaitInitial",
             Self::BasicSettingsSendResponse { .. } => "BasicSettingsSendResponse",
             Self::ChannelConnection { .. } => "ChannelConnection",
@@ -231,6 +268,7 @@ impl Sequence for Acceptor {
             AcceptorState::InitiationWaitRequest => Some(&pdu::X224_HINT),
             AcceptorState::InitiationSendConfirm { .. } => None,
             AcceptorState::SecurityUpgrade { .. } => None,
+            AcceptorState::Credssp { .. } => None,
             AcceptorState::BasicSettingsWaitInitial { .. } => Some(&pdu::X224_HINT),
             AcceptorState::BasicSettingsSendResponse { .. } => None,
             AcceptorState::ChannelConnection { connection, .. } => connection.next_pdu_hint(),
@@ -250,9 +288,13 @@ impl Sequence for Acceptor {
     }
 
     fn step(&mut self, input: &[u8], output: &mut WriteBuf) -> ConnectorResult<Written> {
-        let (written, next_state) = match mem::take(&mut self.state) {
+        let prev_state = mem::take(&mut self.state);
+
+        let (written, next_state) = match prev_state {
             AcceptorState::InitiationWaitRequest => {
-                let connection_request = decode::<nego::ConnectionRequest>(input).map_err(ConnectorError::pdu)?;
+                let connection_request = decode::<X224<nego::ConnectionRequest>>(input)
+                    .map_err(ConnectorError::decode)
+                    .map(|p| p.0)?;
 
                 debug!(message = ?connection_request, "Received");
 
@@ -265,30 +307,76 @@ impl Sequence for Acceptor {
             }
 
             AcceptorState::InitiationSendConfirm { requested_protocol } => {
+                let protocols = requested_protocol & self.security;
+                let protocol = if protocols.intersects(SecurityProtocol::HYBRID_EX) {
+                    SecurityProtocol::HYBRID_EX
+                } else if protocols.intersects(SecurityProtocol::HYBRID) {
+                    SecurityProtocol::HYBRID
+                } else if protocols.intersects(SecurityProtocol::SSL) {
+                    SecurityProtocol::SSL
+                } else if self.security.is_empty() {
+                    SecurityProtocol::empty()
+                } else {
+                    return Err(ConnectorError::general("failed to negotiate security protocol"));
+                };
                 let connection_confirm = nego::ConnectionConfirm::Response {
                     flags: nego::ResponseFlags::empty(),
-                    protocol: self.security,
+                    protocol,
                 };
 
                 debug!(message = ?connection_confirm, "Send");
 
-                let written = ironrdp_pdu::encode_buf(&connection_confirm, output).map_err(ConnectorError::pdu)?;
+                let written =
+                    ironrdp_core::encode_buf(&X224(connection_confirm), output).map_err(ConnectorError::encode)?;
 
                 (
                     Written::from_size(written)?,
-                    AcceptorState::SecurityUpgrade { requested_protocol },
+                    AcceptorState::SecurityUpgrade {
+                        requested_protocol,
+                        protocol,
+                    },
                 )
             }
 
-            AcceptorState::SecurityUpgrade { requested_protocol } => (
+            AcceptorState::SecurityUpgrade {
+                requested_protocol,
+                protocol,
+            } => {
+                debug!(?requested_protocol);
+                let next_state = if protocol.intersects(SecurityProtocol::HYBRID | SecurityProtocol::HYBRID_EX) {
+                    AcceptorState::Credssp {
+                        requested_protocol,
+                        protocol,
+                    }
+                } else {
+                    AcceptorState::BasicSettingsWaitInitial {
+                        requested_protocol,
+                        protocol,
+                    }
+                };
+                (Written::Nothing, next_state)
+            }
+
+            AcceptorState::Credssp {
+                requested_protocol,
+                protocol,
+            } => (
                 Written::Nothing,
-                AcceptorState::BasicSettingsWaitInitial { requested_protocol },
+                AcceptorState::BasicSettingsWaitInitial {
+                    requested_protocol,
+                    protocol,
+                },
             ),
 
-            AcceptorState::BasicSettingsWaitInitial { requested_protocol } => {
-                let x224_payload = decode::<pdu::x224::X224Data<'_>>(input).map_err(ConnectorError::pdu)?;
+            AcceptorState::BasicSettingsWaitInitial {
+                requested_protocol,
+                protocol,
+            } => {
+                let x224_payload = decode::<X224<pdu::x224::X224Data<'_>>>(input)
+                    .map_err(ConnectorError::decode)
+                    .map(|p| p.0)?;
                 let settings_initial =
-                    decode::<mcs::ConnectInitial>(x224_payload.data.as_ref()).map_err(ConnectorError::pdu)?;
+                    decode::<mcs::ConnectInitial>(x224_payload.data.as_ref()).map_err(ConnectorError::decode)?;
 
                 debug!(message = ?settings_initial, "Received");
 
@@ -335,6 +423,7 @@ impl Sequence for Acceptor {
                     Written::Nothing,
                     AcceptorState::BasicSettingsSendResponse {
                         requested_protocol,
+                        protocol,
                         early_capability,
                         channels,
                     },
@@ -343,6 +432,7 @@ impl Sequence for Acceptor {
 
             AcceptorState::BasicSettingsSendResponse {
                 requested_protocol,
+                protocol,
                 early_capability,
                 channels,
             } => {
@@ -375,6 +465,7 @@ impl Sequence for Acceptor {
                 (
                     Written::from_size(written)?,
                     AcceptorState::ChannelConnection {
+                        protocol,
                         early_capability,
                         channels,
                         connection: if skip_channel_join {
@@ -387,6 +478,7 @@ impl Sequence for Acceptor {
             }
 
             AcceptorState::ChannelConnection {
+                protocol,
                 early_capability,
                 channels,
                 mut connection,
@@ -394,11 +486,13 @@ impl Sequence for Acceptor {
                 let written = connection.step(input, output)?;
                 let state = if connection.is_done() {
                     AcceptorState::RdpSecurityCommencement {
+                        protocol,
                         early_capability,
                         channels,
                     }
                 } else {
                     AcceptorState::ChannelConnection {
+                        protocol,
                         early_capability,
                         channels,
                         connection,
@@ -409,26 +503,48 @@ impl Sequence for Acceptor {
             }
 
             AcceptorState::RdpSecurityCommencement {
+                protocol,
                 early_capability,
                 channels,
                 ..
             } => (
                 Written::Nothing,
                 AcceptorState::SecureSettingsExchange {
+                    protocol,
                     early_capability,
                     channels,
                 },
             ),
 
             AcceptorState::SecureSettingsExchange {
+                protocol,
                 early_capability,
                 channels,
             } => {
-                let data: mcs::SendDataRequest<'_> = decode(input).map_err(ConnectorError::pdu)?;
-                let client_info: rdp::ClientInfoPdu = decode(data.user_data.as_ref()).map_err(ConnectorError::pdu)?;
+                let data: X224<mcs::SendDataRequest<'_>> = decode(input).map_err(ConnectorError::decode)?;
+                let data = data.0;
+                let client_info: rdp::ClientInfoPdu =
+                    decode(data.user_data.as_ref()).map_err(ConnectorError::decode)?;
 
                 debug!(message = ?client_info, "Received");
 
+                if !protocol.intersects(SecurityProtocol::HYBRID | SecurityProtocol::HYBRID_EX) {
+                    let creds = client_info.client_info.credentials;
+
+                    if self.creds.as_ref().map_or(true, |srv_creds| srv_creds != &creds) {
+                        // FIXME: How authorization should be denied with standard RDP security?
+                        // Since standard RDP security is not a priority, we just send a ServerDeniedConnection ServerSetErrorInfo PDU.
+                        let info = ServerSetErrorInfoPdu(ErrorInfo::ProtocolIndependentCode(
+                            ProtocolIndependentCode::ServerDeniedConnection,
+                        ));
+
+                        debug!(message = ?info, "Send");
+
+                        util::encode_send_data_indication(self.user_channel_id, self.io_channel_id, &info, output)?;
+
+                        return Err(ConnectorError::general("invalid credentials"));
+                    }
+                }
                 (
                     Written::Nothing,
                     AcceptorState::LicensingExchange {
@@ -443,7 +559,7 @@ impl Sequence for Acceptor {
                 channels,
             } => {
                 let license: LicensePdu = LicensingErrorMessage::new_valid_client()
-                    .map_err(ConnectorError::pdu)?
+                    .map_err(ConnectorError::encode)?
                     .into();
 
                 debug!(message = ?license, "Send");
@@ -524,13 +640,38 @@ impl Sequence for Acceptor {
                 )
             }
 
-            AcceptorState::CapabilitiesWaitConfirm { channels } => {
-                let message = decode::<mcs::McsMessage<'_>>(input).map_err(ConnectorError::pdu)?;
-
+            AcceptorState::CapabilitiesWaitConfirm { ref channels } => {
+                let message = decode::<X224<mcs::McsMessage<'_>>>(input)
+                    .map_err(ConnectorError::decode)
+                    .map(|p| p.0);
+                let message = match message {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        if self.reactivation {
+                            debug!("Dropping unexpected PDU during reactivation");
+                            self.state = prev_state;
+                            return Ok(Written::Nothing);
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                };
                 match message {
                     mcs::McsMessage::SendDataRequest(data) => {
                         let capabilities_confirm = decode::<rdp::headers::ShareControlHeader>(data.user_data.as_ref())
-                            .map_err(ConnectorError::pdu)?;
+                            .map_err(ConnectorError::decode);
+                        let capabilities_confirm = match capabilities_confirm {
+                            Ok(capabilities_confirm) => capabilities_confirm,
+                            Err(e) => {
+                                if self.reactivation {
+                                    debug!("Dropping unexpected PDU during reactivation");
+                                    self.state = prev_state;
+                                    return Ok(Written::Nothing);
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                        };
 
                         debug!(message = ?capabilities_confirm, "Received");
 
@@ -542,7 +683,7 @@ impl Sequence for Acceptor {
                         (
                             Written::Nothing,
                             AcceptorState::ConnectionFinalization {
-                                channels,
+                                channels: channels.clone(),
                                 finalization: FinalizationSequence::new(self.user_channel_id, self.io_channel_id),
                                 client_capabilities: confirm.pdu.capability_sets,
                             },
@@ -556,7 +697,7 @@ impl Sequence for Acceptor {
                     _ => {
                         warn!(?message, "Unexpected MCS message received");
 
-                        (Written::Nothing, AcceptorState::CapabilitiesWaitConfirm { channels })
+                        (Written::Nothing, prev_state)
                     }
                 }
             }
@@ -567,6 +708,7 @@ impl Sequence for Acceptor {
                 client_capabilities,
             } => {
                 let written = finalization.step(input, output)?;
+
                 let state = if finalization.is_done() {
                     AcceptorState::Accepted {
                         channels,
@@ -595,7 +737,7 @@ impl Sequence for Acceptor {
 fn create_gcc_blocks(
     io_channel: u16,
     channel_ids: Vec<u16>,
-    requested: nego::SecurityProtocol,
+    requested: SecurityProtocol,
     skip_channel_join: bool,
 ) -> gcc::ServerGccBlocks {
     gcc::ServerGccBlocks {

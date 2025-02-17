@@ -1,13 +1,8 @@
 [package]
 name = "ffi"
 version = "0.1.0"
-edition.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
-authors.workspace = true
-keywords.workspace = true
-categories.workspace = true
+edition = "2021"
+publish = false
 
 [lib]
 name = "ironrdp"
@@ -19,18 +14,16 @@ doctest = false
 [dependencies]
 diplomat = "0.7"
 diplomat-runtime = "0.7"
-ironrdp = { workspace = true, features = ["connector", "dvc", "svc", "rdpdr", "rdpsnd", "graphics", "input", "cliprdr", "displaycontrol"] }
+ironrdp = { workspace = true, features = ["session", "connector", "dvc", "svc", "rdpdr", "rdpsnd", "graphics", "input", "cliprdr", "displaycontrol"] }
 ironrdp-cliprdr-native = { workspace = true }
+ironrdp-core = { workspace = true, features = ["alloc"] }
 sspi = { workspace = true, features = ["network_client"] }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(windows)'.build-dependencies]
-embed-resource = "2.4"
-
-[target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation"] }
+embed-resource = "3.0"
 
 [lints]
 workspace = true

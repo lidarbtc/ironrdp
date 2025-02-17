@@ -1,16 +1,20 @@
 #[cfg(test)]
 mod tests;
 
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
+
 use super::{
     BlobHeader, BlobType, LicenseEncryptionData, LicenseHeader, PreambleType, ServerLicenseError, BLOB_LENGTH_SIZE,
     BLOB_TYPE_SIZE, MAC_SIZE, UTF16_NULL_TERMINATOR_SIZE, UTF8_NULL_TERMINATOR_SIZE,
 };
 use crate::crypto::rc4::Rc4;
-use crate::cursor::{ReadCursor, WriteCursor};
+use crate::utils;
 use crate::utils::CharacterSet;
-use crate::{utils, PduDecode, PduEncode, PduResult};
 
-const NEW_LICENSE_INFO_STATIC_FIELDS_SIZE: usize = 20;
+const LICENSE_INFO_STATIC_FIELDS_SIZE: usize = 20;
 
 /// [2.2.2.6] Server Upgrade License (SERVER_UPGRADE_LICENSE)
 ///
@@ -24,8 +28,7 @@ pub struct ServerUpgradeLicense {
 
 impl ServerUpgradeLicense {
     pub fn verify_server_license(&self, encryption_data: &LicenseEncryptionData) -> Result<(), ServerLicenseError> {
-        let mut rc4 = Rc4::new(encryption_data.license_key.as_slice());
-        let decrypted_license_info = rc4.process(self.encrypted_license_info.as_slice());
+        let decrypted_license_info = self.decrypted_license_info(encryption_data);
         let mac_data =
             super::compute_mac_data(encryption_data.mac_salt_key.as_slice(), decrypted_license_info.as_ref());
 
@@ -35,6 +38,16 @@ impl ServerUpgradeLicense {
 
         Ok(())
     }
+
+    pub fn new_license_info(&self, encryption_data: &LicenseEncryptionData) -> DecodeResult<LicenseInformation> {
+        let data = self.decrypted_license_info(encryption_data);
+        LicenseInformation::decode(&mut ReadCursor::new(&data))
+    }
+
+    fn decrypted_license_info(&self, encryption_data: &LicenseEncryptionData) -> Vec<u8> {
+        let mut rc4 = Rc4::new(encryption_data.license_key.as_slice());
+        rc4.process(self.encrypted_license_info.as_slice())
+    }
 }
 
 impl ServerUpgradeLicense {
@@ -42,7 +55,7 @@ impl ServerUpgradeLicense {
 }
 
 impl ServerUpgradeLicense {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         self.license_header.encode(dst)?;
@@ -63,11 +76,11 @@ impl ServerUpgradeLicense {
 }
 
 impl ServerUpgradeLicense {
-    pub fn decode(license_header: LicenseHeader, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(license_header: LicenseHeader, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         if license_header.preamble_message_type != PreambleType::UpgradeLicense
             && license_header.preamble_message_type != PreambleType::NewLicense
         {
-            return Err(invalid_message_err!(
+            return Err(invalid_field_err!(
                 "preambleType",
                 "got unexpected message preamble type"
             ));
@@ -75,7 +88,7 @@ impl ServerUpgradeLicense {
 
         let encrypted_license_info_blob = BlobHeader::decode(src)?;
         if encrypted_license_info_blob.blob_type != BlobType::ENCRYPTED_DATA {
-            return Err(invalid_message_err!("blobType", "unexpected blob type"));
+            return Err(invalid_field_err!("blobType", "unexpected blob type"));
         }
 
         ensure_size!(in: src, size: encrypted_license_info_blob.length + MAC_SIZE);
@@ -90,8 +103,8 @@ impl ServerUpgradeLicense {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct NewLicenseInformation {
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct LicenseInformation {
     pub version: u32,
     pub scope: String,
     pub company_name: String,
@@ -99,14 +112,14 @@ pub struct NewLicenseInformation {
     pub license_info: Vec<u8>,
 }
 
-impl NewLicenseInformation {
-    const NAME: &'static str = "NewLicenseInformation";
+impl LicenseInformation {
+    const NAME: &'static str = "LicenseInformation";
 
-    const FIXED_PART_SIZE: usize = NEW_LICENSE_INFO_STATIC_FIELDS_SIZE;
+    const FIXED_PART_SIZE: usize = LICENSE_INFO_STATIC_FIELDS_SIZE;
 }
 
-impl PduEncode for NewLicenseInformation {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for LicenseInformation {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(self.version);
@@ -147,8 +160,8 @@ impl PduEncode for NewLicenseInformation {
     }
 }
 
-impl<'de> PduDecode<'de> for NewLicenseInformation {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for LicenseInformation {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let version = src.read_u32();

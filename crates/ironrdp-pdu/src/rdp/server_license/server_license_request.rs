@@ -4,15 +4,16 @@ pub mod cert;
 mod tests;
 
 use cert::{CertificateType, ProprietaryCertificate, X509CertificateChain};
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
 
 use super::{
     BlobHeader, BlobType, LicenseHeader, PreambleType, ServerLicenseError, BLOB_LENGTH_SIZE, BLOB_TYPE_SIZE,
     KEY_EXCHANGE_ALGORITHM_RSA, RANDOM_NUMBER_SIZE, UTF16_NULL_TERMINATOR_SIZE, UTF8_NULL_TERMINATOR_SIZE,
 };
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    utils, PduDecode, PduEncode, PduResult,
-};
+use crate::utils;
 
 const CERT_VERSION_FIELD_SIZE: usize = 4;
 const KEY_EXCHANGE_FIELD_SIZE: usize = 4;
@@ -47,7 +48,7 @@ impl ServerLicenseRequest {
 }
 
 impl ServerLicenseRequest {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         self.license_header.encode(dst)?;
@@ -92,9 +93,9 @@ impl ServerLicenseRequest {
 }
 
 impl ServerLicenseRequest {
-    pub fn decode(license_header: LicenseHeader, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(license_header: LicenseHeader, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         if license_header.preamble_message_type != PreambleType::LicenseRequest {
-            return Err(invalid_message_err!("preambleMessageType", "unexpected preamble type"));
+            return Err(invalid_field_err!("preambleMessageType", "unexpected preamble type"));
         }
 
         ensure_size!(in: src, size: RANDOM_NUMBER_SIZE);
@@ -104,18 +105,18 @@ impl ServerLicenseRequest {
 
         let key_exchange_algorithm_blob = BlobHeader::decode(src)?;
         if key_exchange_algorithm_blob.blob_type != BlobType::KEY_EXCHANGE_ALGORITHM {
-            return Err(invalid_message_err!("blobType", "invalid blob type"));
+            return Err(invalid_field_err!("blobType", "invalid blob type"));
         }
 
         ensure_size!(in: src, size: 4);
         let key_exchange_algorithm = src.read_u32();
         if key_exchange_algorithm != RSA_EXCHANGE_ALGORITHM {
-            return Err(invalid_message_err!("keyAlgo", "invalid key exchange algorithm"));
+            return Err(invalid_field_err!("keyAlgo", "invalid key exchange algorithm"));
         }
 
         let cert_blob = BlobHeader::decode(src)?;
         if cert_blob.blob_type != BlobType::CERTIFICATE {
-            return Err(invalid_message_err!("blobType", "invalid blob type"));
+            return Err(invalid_field_err!("blobType", "invalid blob type"));
         }
 
         // The terminal server can choose not to send the certificate by setting the wblobLen field in the Licensing Binary BLOB structure to 0
@@ -128,7 +129,7 @@ impl ServerLicenseRequest {
         ensure_size!(in: src, size: 4);
         let scope_count = src.read_u32();
         if scope_count > MAX_SCOPE_COUNT {
-            return Err(invalid_message_err!("scopeCount", "invalid scope count"));
+            return Err(invalid_field_err!("scopeCount", "invalid scope count"));
         }
 
         let mut scope_list = Vec::with_capacity(scope_count as usize);
@@ -156,8 +157,8 @@ impl Scope {
     const FIXED_PART_SIZE: usize = BLOB_TYPE_SIZE + BLOB_LENGTH_SIZE;
 }
 
-impl PduEncode for Scope {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Scope {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let data_size = self.0.len() + UTF8_NULL_TERMINATOR_SIZE;
@@ -177,23 +178,23 @@ impl PduEncode for Scope {
     }
 }
 
-impl<'de> PduDecode<'de> for Scope {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Scope {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let blob_header = BlobHeader::decode(src)?;
         if blob_header.blob_type != BlobType::SCOPE {
-            return Err(invalid_message_err!("blobType", "invalid blob type"));
+            return Err(invalid_field_err!("blobType", "invalid blob type"));
         }
         if blob_header.length < UTF8_NULL_TERMINATOR_SIZE {
-            return Err(invalid_message_err!("blobLen", "blob too small"));
+            return Err(invalid_field_err!("blobLen", "blob too small"));
         }
         ensure_size!(in: src, size: blob_header.length);
         let mut blob_data = src.read_slice(blob_header.length).to_vec();
         blob_data.resize(blob_data.len() - UTF8_NULL_TERMINATOR_SIZE, 0);
 
-        if let Ok(data) = std::str::from_utf8(&blob_data) {
+        if let Ok(data) = core::str::from_utf8(&blob_data) {
             Ok(Self(String::from(data)))
         } else {
-            Err(invalid_message_err!("scope", "scope is not utf8"))
+            Err(invalid_field_err!("scope", "scope is not utf8"))
         }
     }
 }
@@ -254,8 +255,8 @@ impl ServerCertificate {
     }
 }
 
-impl PduEncode for ServerCertificate {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerCertificate {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let cert_version: u32 = match self.certificate {
@@ -292,8 +293,8 @@ impl PduEncode for ServerCertificate {
     }
 }
 
-impl<'de> PduDecode<'de> for ServerCertificate {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ServerCertificate {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let cert_version = src.read_u32();
@@ -303,7 +304,7 @@ impl<'de> PduDecode<'de> for ServerCertificate {
         let certificate = match cert_version & CERT_CHAIN_VERSION_MASK {
             1 => CertificateType::Proprietary(ProprietaryCertificate::decode(src)?),
             2 => CertificateType::X509(X509CertificateChain::decode(src)?),
-            _ => return Err(invalid_message_err!("certVersion", "invalid certificate version")),
+            _ => return Err(invalid_field_err!("certVersion", "invalid certificate version")),
         };
 
         Ok(Self {
@@ -326,8 +327,8 @@ impl ProductInfo {
     const FIXED_PART_SIZE: usize = PRODUCT_INFO_STATIC_FIELDS_SIZE;
 }
 
-impl PduEncode for ProductInfo {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ProductInfo {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(self.version);
@@ -363,15 +364,15 @@ impl PduEncode for ProductInfo {
     }
 }
 
-impl<'de> PduDecode<'de> for ProductInfo {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ProductInfo {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let version = src.read_u32();
 
         let company_name_len = cast_length!("companyLen", src.read_u32())?;
         if !(2..=MAX_COMPANY_NAME_LEN).contains(&company_name_len) {
-            return Err(invalid_message_err!("companyLen", "invalid company name length"));
+            return Err(invalid_field_err!("companyLen", "invalid company name length"));
         }
 
         ensure_size!(in: src, size: company_name_len);
@@ -382,7 +383,7 @@ impl<'de> PduDecode<'de> for ProductInfo {
         ensure_size!(in: src, size: 4);
         let product_id_len = cast_length!("productIdLen", src.read_u32())?;
         if !(2..=MAX_PRODUCT_ID_LEN).contains(&product_id_len) {
-            return Err(invalid_message_err!("productIdLen", "invalid produce ID length"));
+            return Err(invalid_field_err!("productIdLen", "invalid produce ID length"));
         }
 
         ensure_size!(in: src, size: product_id_len);

@@ -1,10 +1,11 @@
+#![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://cdnweb.devolutions.net/images/projects/devolutions/logos/devolutions-icon-shadow.svg")]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::boxed::Box;
-
 use core::fmt;
 
 #[cfg(feature = "std")]
@@ -158,32 +159,5 @@ where
         }
 
         Ok(())
-    }
-}
-
-/// Temporary compatibility traits to smooth transition from old style
-#[cfg(feature = "std")]
-#[doc(hidden)]
-pub mod legacy {
-    #[doc(hidden)]
-    pub trait CatchAllKind {
-        const CATCH_ALL_VALUE: Self;
-    }
-
-    #[doc(hidden)]
-    pub trait ErrorContext: std::error::Error {
-        fn context(&self) -> &'static str;
-    }
-
-    #[doc(hidden)]
-    impl<E, Kind> From<E> for crate::Error<Kind>
-    where
-        E: ErrorContext + Send + Sync + 'static,
-        Kind: CatchAllKind,
-    {
-        #[cold]
-        fn from(error: E) -> Self {
-            Self::new(error.context(), Kind::CATCH_ALL_VALUE).with_source(error)
-        }
     }
 }

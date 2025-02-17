@@ -1,6 +1,5 @@
-use ironrdp_pdu::cursor::ReadCursor;
+use ironrdp_core::{decode, encode_vec, DecodeErrorKind, Encode, EncodeErrorKind, ReadCursor};
 use ironrdp_pdu::gcc::*;
-use ironrdp_pdu::{decode, encode_vec, PduEncode, PduErrorKind};
 use ironrdp_testsuite_core::cluster_data::*;
 use ironrdp_testsuite_core::conference_create::*;
 use ironrdp_testsuite_core::core_data::*;
@@ -766,7 +765,7 @@ fn from_buffer_server_security_data_fails_with_invalid_server_random_length() {
     let buffer = SERVER_SECURITY_DATA_WITH_INVALID_SERVER_RANDOM_BUFFER;
 
     match decode::<ServerSecurityData>(buffer.as_slice()) {
-        Err(e) if matches!(e.kind(), PduErrorKind::InvalidMessage { .. }) => (),
+        Err(e) if matches!(e.kind(), DecodeErrorKind::InvalidField { .. }) => (),
         res => panic!("Expected the invalid server random length error, got: {res:?}"),
     };
 }
@@ -794,7 +793,7 @@ fn to_buffer_server_security_data_fails_on_mismatch_of_required_and_optional_fie
     let security_data = SERVER_SECURITY_DATA_WITH_MISMATCH_OF_REQUIRED_AND_OPTIONAL_FIELDS.clone();
 
     match encode_vec(&security_data) {
-        Err(e) if matches!(e.kind(), PduErrorKind::InvalidMessage { .. }) => (),
+        Err(e) if matches!(e.kind(), EncodeErrorKind::InvalidField { .. }) => (),
         res => panic!("Expected the invalid input error, got: {res:?}"),
     };
 }

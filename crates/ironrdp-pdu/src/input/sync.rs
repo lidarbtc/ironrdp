@@ -1,9 +1,5 @@
 use bitflags::bitflags;
-
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    PduDecode, PduEncode, PduResult,
-};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncPdu {
@@ -16,8 +12,8 @@ impl SyncPdu {
     const FIXED_PART_SIZE: usize = 2 /* padding */ + 4 /* flags */;
 }
 
-impl PduEncode for SyncPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for SyncPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         write_padding!(dst, 2);
@@ -35,8 +31,8 @@ impl PduEncode for SyncPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for SyncPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for SyncPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         read_padding!(src, 2);

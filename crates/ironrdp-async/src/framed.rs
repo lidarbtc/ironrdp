@@ -2,13 +2,14 @@ use std::io;
 
 use bytes::{Bytes, BytesMut};
 use ironrdp_connector::{ConnectorResult, Sequence, Written};
-use ironrdp_pdu::{write_buf::WriteBuf, PduHint};
+use ironrdp_core::WriteBuf;
+use ironrdp_pdu::PduHint;
 
 // TODO: investigate if we could use static async fn / return position impl trait in traits when stabilized:
 // https://github.com/rust-lang/rust/issues/91611
 
 pub trait FramedRead {
-    type ReadFut<'read>: std::future::Future<Output = io::Result<usize>> + 'read
+    type ReadFut<'read>: core::future::Future<Output = io::Result<usize>> + 'read
     where
         Self: 'read;
 
@@ -23,7 +24,7 @@ pub trait FramedRead {
 }
 
 pub trait FramedWrite {
-    type WriteAllFut<'write>: std::future::Future<Output = io::Result<()>> + 'write
+    type WriteAllFut<'write>: core::future::Future<Output = io::Result<()>> + 'write
     where
         Self: 'write;
 
@@ -164,11 +165,7 @@ where
     /// `tokio::select!` statement and some other branch
     /// completes first, then it is safe to drop the future and re-create it later.
     /// Data may have been read, but it will be stored in the internal buffer.
-    pub async fn read_by_hint(
-        &mut self,
-        hint: &dyn PduHint,
-        mut unmatched: Option<&mut Vec<Bytes>>,
-    ) -> io::Result<Bytes> {
+    pub async fn read_by_hint(&mut self, hint: &dyn PduHint) -> io::Result<Bytes> {
         loop {
             match hint
                 .find_size(self.peek())
@@ -178,10 +175,8 @@ where
                     let bytes = self.read_exact(length).await?.freeze();
                     if matched {
                         return Ok(bytes);
-                    } else if let Some(ref mut unmatched) = unmatched {
-                        unmatched.push(bytes);
                     } else {
-                        warn!("Received and lost an unexpected PDU");
+                        debug!("Received and lost an unexpected PDU");
                     }
                 }
                 None => {
@@ -208,10 +203,15 @@ where
     }
 }
 
-impl<S> Framed<S>
+impl<S> FramedWrite for Framed<S>
 where
     S: FramedWrite,
 {
+    type WriteAllFut<'write>
+        = S::WriteAllFut<'write>
+    where
+        Self: 'write;
+
     /// Attempts to write an entire buffer into this `Framed`’s stream.
     ///
     /// # Cancel safety
@@ -221,8 +221,8 @@ where
     /// branch completes first, then the provided buffer may have been
     /// partially written, but future calls to `write_all` will start over
     /// from the beginning of the buffer.
-    pub async fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.stream.write_all(buf).await
+    fn write_all<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteAllFut<'a> {
+        self.stream.write_all(buf)
     }
 }
 
@@ -230,13 +230,12 @@ pub async fn single_sequence_step<S>(
     framed: &mut Framed<S>,
     sequence: &mut dyn Sequence,
     buf: &mut WriteBuf,
-    unmatched: Option<&mut Vec<Bytes>>,
 ) -> ConnectorResult<()>
 where
     S: FramedWrite + FramedRead,
 {
     buf.clear();
-    let written = single_sequence_step_read(framed, sequence, buf, unmatched).await?;
+    let written = single_sequence_step_read(framed, sequence, buf).await?;
     single_sequence_step_write(framed, buf, written).await
 }
 
@@ -244,7 +243,6 @@ pub async fn single_sequence_step_read<S>(
     framed: &mut Framed<S>,
     sequence: &mut dyn Sequence,
     buf: &mut WriteBuf,
-    unmatched: Option<&mut Vec<Bytes>>,
 ) -> ConnectorResult<Written>
 where
     S: FramedRead,
@@ -259,7 +257,7 @@ where
         );
 
         let pdu = framed
-            .read_by_hint(next_pdu_hint, unmatched)
+            .read_by_hint(next_pdu_hint)
             .await
             .map_err(|e| ironrdp_connector::custom_err!("read frame by hint", e))?;
 

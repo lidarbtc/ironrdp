@@ -2,9 +2,10 @@
 #![allow(non_snake_case)]
 
 use core::cell::RefCell;
+use core::num::NonZeroU32;
+use core::time::Duration;
 use std::borrow::Cow;
 use std::rc::Rc;
-use std::time::Duration;
 
 use anyhow::Context as _;
 use base64::Engine as _;
@@ -18,13 +19,15 @@ use ironrdp::cliprdr::CliprdrClient;
 use ironrdp::connector::connection_activation::ConnectionActivationState;
 use ironrdp::connector::credssp::KerberosConfig;
 use ironrdp::connector::{self, ClientConnector, Credentials};
+use ironrdp::displaycontrol::client::DisplayControlClient;
+use ironrdp::dvc::DrdynvcClient;
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::pdu::input::fast_path::FastPathInputEvent;
 use ironrdp::pdu::rdp::client_info::PerformanceFlags;
-use ironrdp::pdu::write_buf::WriteBuf;
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{fast_path, ActiveStage, ActiveStageOutput, GracefulDisconnectReason};
-use ironrdp_futures::single_sequence_step_read;
+use ironrdp_core::WriteBuf;
+use ironrdp_futures::{single_sequence_step_read, FramedWrite};
 use rgb::AsPixels as _;
 use tap::prelude::*;
 use wasm_bindgen::prelude::*;
@@ -64,6 +67,8 @@ struct SessionBuilderInner {
     remote_clipboard_changed_callback: Option<js_sys::Function>,
     remote_received_format_list_callback: Option<js_sys::Function>,
     force_clipboard_update_callback: Option<js_sys::Function>,
+
+    use_display_control: bool,
 }
 
 impl Default for SessionBuilderInner {
@@ -89,6 +94,8 @@ impl Default for SessionBuilderInner {
             remote_clipboard_changed_callback: None,
             remote_received_format_list_callback: None,
             force_clipboard_update_callback: None,
+
+            use_display_control: false,
         }
     }
 }
@@ -209,6 +216,12 @@ impl SessionBuilder {
         self.clone()
     }
 
+    /// Optional
+    pub fn use_display_control(&self) -> SessionBuilder {
+        self.0.borrow_mut().use_display_control = true;
+        self.clone()
+    }
+
     pub async fn connect(&self) -> Result<Session, IronRdpError> {
         let (
             username,
@@ -301,15 +314,18 @@ impl SessionBuilder {
             }
         }
 
-        let (connection_result, ws) = connect(
+        let use_display_control = self.0.borrow().use_display_control;
+
+        let (connection_result, ws) = connect(ConnectParams {
             ws,
             config,
-            auth_token,
+            proxy_auth_token: auth_token,
             destination,
             pcb,
             kdc_proxy_url,
-            clipboard.as_ref().map(|clip| clip.backend()),
-        )
+            clipboard_backend: clipboard.as_ref().map(|clip| clip.backend()),
+            use_display_control,
+        })
         .await?;
 
         info!("Connected!");
@@ -345,6 +361,12 @@ pub(crate) enum RdpInputEvent {
     Cliprdr(ClipboardMessage),
     ClipboardBackend(WasmClipboardBackendMessage),
     FastPath(FastPathInputEvents),
+    Resize {
+        width: u32,
+        height: u32,
+        scale_factor: Option<u32>,
+        physical_size: Option<(u32, u32)>,
+    },
     TerminateSession,
 }
 
@@ -489,6 +511,21 @@ impl Session {
                             active_stage.process_fastpath_input(&mut image, &events)
                                 .context("fast path input events processing")?
                         }
+                        RdpInputEvent::Resize { width, height, scale_factor, physical_size } => {
+                            debug!(width, height, scale_factor, "Resize event received");
+                            if width == 0 || height == 0 {
+                                warn!("Resize event ignored: width or height is zero");
+                                Vec::new()
+                            } else if let Some(response_frame) = active_stage.encode_resize(width, height, scale_factor, physical_size) {
+                                self.render_canvas.set_width(width);
+                                self.render_canvas.set_height(height);
+                                gui.resize(NonZeroU32::new(width).unwrap(), NonZeroU32::new(height).unwrap());
+                                vec![ActiveStageOutput::ResponseFrame(response_frame?)]
+                            } else {
+                                debug!("Resize event ignored");
+                                Vec::new()
+                            }
+                        },
                         RdpInputEvent::TerminateSession => {
                             active_stage.graceful_shutdown()
                                 .context("graceful shutdown")?
@@ -616,7 +653,7 @@ impl Session {
                         let mut buf = WriteBuf::new();
                         'activation_seq: loop {
                             let written =
-                                single_sequence_step_read(&mut framed, &mut *box_connection_activation, &mut buf, None)
+                                single_sequence_step_read(&mut framed, &mut *box_connection_activation, &mut buf)
                                     .await?;
 
                             if written.size().is_some() {
@@ -704,7 +741,7 @@ impl Session {
         let event = ironrdp::input::synchronize_event(scroll_lock, num_lock, caps_lock, kana_lock);
         let fastpath_input = FastPathInput(vec![event]);
 
-        let frame = ironrdp::pdu::encode_vec(&fastpath_input).context("FastPathInput encoding")?;
+        let frame = ironrdp::core::encode_vec(&fastpath_input).context("FastPathInput encoding")?;
 
         self.writer_tx
             .unbounded_send(frame)
@@ -757,6 +794,24 @@ impl Session {
         Ok(())
     }
 
+    pub fn resize(
+        &self,
+        width: u32,
+        height: u32,
+        scale_factor: Option<u32>,
+        physical_width: Option<u32>,
+        physical_height: Option<u32>,
+    ) {
+        self.input_events_tx
+            .unbounded_send(RdpInputEvent::Resize {
+                width,
+                height,
+                scale_factor,
+                physical_size: physical_width.and_then(|width| physical_height.map(|height| (width, height))),
+            })
+            .expect("send resize event to writer task");
+    }
+
     #[allow(clippy::unused_self)]
     pub fn supports_unicode_keyboard_shortcuts(&self) -> bool {
         // RDP does not support Unicode keyboard shortcuts (When key combinations are executed, only
@@ -805,9 +860,12 @@ fn build_config(
         platform: ironrdp::pdu::rdp::capability_sets::MajorPlatformType::UNSPECIFIED,
         no_server_pointer: false,
         autologon: false,
+        request_data: None,
         pointer_software_rendering: false,
         performance_flags: PerformanceFlags::default(),
         desktop_scale_factor: 0,
+        hardware_id: None,
+        license_cache: None,
     }
 }
 
@@ -832,7 +890,7 @@ async fn writer_task(rx: mpsc::UnboundedReceiver<Vec<u8>>, rdp_writer: WriteHalf
     }
 }
 
-async fn connect(
+struct ConnectParams {
     ws: WebSocket,
     config: connector::Config,
     proxy_auth_token: String,
@@ -840,6 +898,20 @@ async fn connect(
     pcb: Option<String>,
     kdc_proxy_url: Option<String>,
     clipboard_backend: Option<WasmClipboardBackend>,
+    use_display_control: bool,
+}
+
+async fn connect(
+    ConnectParams {
+        ws,
+        config,
+        proxy_auth_token,
+        destination,
+        pcb,
+        kdc_proxy_url,
+        clipboard_backend,
+        use_display_control,
+    }: ConnectParams,
 ) -> Result<(connector::ConnectionResult, WebSocket), IronRdpError> {
     let mut framed = ironrdp_futures::LocalFuturesFramed::new(ws);
 
@@ -847,6 +919,12 @@ async fn connect(
 
     if let Some(clipboard_backend) = clipboard_backend {
         connector.attach_static_channel(CliprdrClient::new(Box::new(clipboard_backend)));
+    }
+
+    if use_display_control {
+        connector.attach_static_channel(
+            DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
+        );
     }
 
     let (upgraded, server_public_key) =
@@ -883,7 +961,7 @@ async fn connect_rdcleanpath<S>(
     pcb: Option<String>,
 ) -> Result<(ironrdp_futures::Upgraded, Vec<u8>), IronRdpError>
 where
-    S: ironrdp_futures::FramedRead + ironrdp_futures::FramedWrite,
+    S: ironrdp_futures::FramedRead + FramedWrite,
 {
     use ironrdp::connector::Sequence as _;
     use x509_cert::der::Decode as _;
@@ -894,11 +972,11 @@ where
     const RDCLEANPATH_HINT: RDCleanPathHint = RDCleanPathHint;
 
     impl ironrdp::pdu::PduHint for RDCleanPathHint {
-        fn find_size(&self, bytes: &[u8]) -> ironrdp::pdu::PduResult<Option<(bool, usize)>> {
+        fn find_size(&self, bytes: &[u8]) -> ironrdp::core::DecodeResult<Option<(bool, usize)>> {
             match ironrdp_rdcleanpath::RDCleanPathPdu::detect(bytes) {
                 ironrdp_rdcleanpath::DetectionResult::Detected { total_length, .. } => Ok(Some((true, total_length))),
                 ironrdp_rdcleanpath::DetectionResult::NotEnoughBytes => Ok(None),
-                ironrdp_rdcleanpath::DetectionResult::Failed => Err(ironrdp::pdu::other_err!(
+                ironrdp_rdcleanpath::DetectionResult::Failed => Err(ironrdp::core::other_err!(
                     "RDCleanPathHint",
                     "detection failed (invalid PDU)"
                 )),
@@ -940,7 +1018,7 @@ where
         // RDCleanPath response
 
         let rdcleanpath_res = framed
-            .read_by_hint(&RDCLEANPATH_HINT, None)
+            .read_by_hint(&RDCLEANPATH_HINT)
             .await
             .context("read RDCleanPath request")?;
 

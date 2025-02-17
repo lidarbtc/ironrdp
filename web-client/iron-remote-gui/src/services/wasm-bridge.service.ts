@@ -57,6 +57,11 @@ export class WasmBridgeService {
     sessionObserver: Observable<SessionEvent> = this.sessionEvent.asObservable();
     scaleObserver: Observable<ScreenScale> = this.scale.asObservable();
 
+    dynamicResize = new Subject<{
+        width: number;
+        height: number;
+    }>();
+
     constructor() {
         this.resize = this._resize.asObservable();
         loggingService.info('Web bridge initialized.');
@@ -131,6 +136,7 @@ export class WasmBridgeService {
         desktopSize?: IDesktopSize,
         preConnectionBlob?: string,
         kdc_proxy_url?: string,
+        use_display_control = true,
     ): Observable<NewSessionInfo> {
         const sessionBuilder = SessionBuilder.new();
         sessionBuilder.proxy_address(proxyAddress);
@@ -143,6 +149,7 @@ export class WasmBridgeService {
         sessionBuilder.set_cursor_style_callback_context(this);
         sessionBuilder.set_cursor_style_callback(this.setCursorStyleCallback);
         sessionBuilder.kdc_proxy_url(kdc_proxy_url);
+        use_display_control && sessionBuilder.use_display_control();
 
         if (preConnectionBlob != null) {
             sessionBuilder.pcb(preConnectionBlob);
@@ -253,6 +260,11 @@ export class WasmBridgeService {
         this.canvas = canvas;
     }
 
+    resizeDynamic(width: number, height: number, scale?: number) {
+        this.dynamicResize.next({ width, height });
+        this.session?.resize(width, height, scale);
+    }
+
     /// Triggered by the browser when local clipboard is updated. Clipboard backend should
     /// cache the content and send it to the server when it is requested.
     onClipboardChanged(transaction: ClipboardTransaction): Promise<void> {
@@ -352,7 +364,7 @@ export class WasmBridgeService {
                 if (isUnicodeCharacter && sendAsUnicode) {
                     this.doTransactionFromDeviceEvents([unicodeEvent(evt.key)]);
                 } else if (!unknownScanCode) {
-                    // Use scancode insdead of key code for non-unicode character values
+                    // Use scancode instead of key code for non-unicode character values
                     this.doTransactionFromDeviceEvents([keyEvent(keyScanCode)]);
                 }
                 return;

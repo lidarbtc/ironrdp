@@ -1,18 +1,18 @@
+use alloc::vec::Vec;
+use core::any::TypeId;
+use core::fmt;
+
+use ironrdp_core::{impl_as_any, Decode as _, DecodeResult, ReadCursor};
+use ironrdp_pdu::{self as pdu, decode_err, encode_err, pdu_other_err};
+use ironrdp_svc::{ChannelFlags, CompressionCondition, SvcClientProcessor, SvcMessage, SvcProcessor};
+use pdu::gcc::ChannelName;
+use pdu::PduResult;
+
 use crate::pdu::{
     CapabilitiesResponsePdu, CapsVersion, ClosePdu, CreateResponsePdu, CreationStatus, DrdynvcClientPdu,
     DrdynvcServerPdu,
 };
 use crate::{encode_dvc_messages, DvcProcessor, DynamicChannelSet, DynamicVirtualChannel};
-use alloc::vec::Vec;
-use core::any::TypeId;
-use core::fmt;
-use ironrdp_pdu as pdu;
-use ironrdp_svc::{impl_as_any, ChannelFlags, CompressionCondition, SvcClientProcessor, SvcMessage, SvcProcessor};
-use pdu::cursor::ReadCursor;
-use pdu::gcc::ChannelName;
-use pdu::other_err;
-use pdu::PduDecode as _;
-use pdu::PduResult;
 
 pub trait DvcClientProcessor: DvcProcessor {}
 
@@ -94,7 +94,7 @@ impl SvcProcessor for DrdynvcClient {
     }
 
     fn process(&mut self, payload: &[u8]) -> PduResult<Vec<SvcMessage>> {
-        let pdu = decode_dvc_message(payload)?;
+        let pdu = decode_dvc_message(payload).map_err(|e| decode_err!(e))?;
         let mut responses = Vec::new();
 
         match pdu {
@@ -133,7 +133,10 @@ impl SvcProcessor for DrdynvcClient {
 
                 // If this DVC has start messages, send them.
                 if !start_messages.is_empty() {
-                    responses.extend(encode_dvc_messages(channel_id, start_messages, ChannelFlags::empty())?);
+                    responses.extend(
+                        encode_dvc_messages(channel_id, start_messages, ChannelFlags::empty())
+                            .map_err(|e| encode_err!(e))?,
+                    );
                 }
             }
             DrdynvcServerPdu::Close(close_request) => {
@@ -151,10 +154,12 @@ impl SvcProcessor for DrdynvcClient {
                 let messages = self
                     .dynamic_channels
                     .get_by_channel_id_mut(&channel_id)
-                    .ok_or_else(|| other_err!("DVC", "access to non existing channel"))?
+                    .ok_or_else(|| pdu_other_err!("access to non existing DVC channel"))?
                     .process(data)?;
 
-                responses.extend(encode_dvc_messages(channel_id, messages, ChannelFlags::empty())?);
+                responses.extend(
+                    encode_dvc_messages(channel_id, messages, ChannelFlags::empty()).map_err(|e| encode_err!(e))?,
+                );
             }
         }
 
@@ -164,6 +169,6 @@ impl SvcProcessor for DrdynvcClient {
 
 impl SvcClientProcessor for DrdynvcClient {}
 
-fn decode_dvc_message(user_data: &[u8]) -> PduResult<DrdynvcServerPdu> {
+fn decode_dvc_message(user_data: &[u8]) -> DecodeResult<DrdynvcServerPdu> {
     DrdynvcServerPdu::decode(&mut ReadCursor::new(user_data))
 }

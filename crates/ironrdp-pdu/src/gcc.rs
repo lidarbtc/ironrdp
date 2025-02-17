@@ -1,11 +1,14 @@
 use std::io;
 
+use ironrdp_core::{
+    cast_length, decode, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeErrorKind, DecodeResult,
+    Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 use thiserror::Error;
 
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{decode, PduDecode, PduEncode, PduError, PduErrorKind, PduResult};
+use crate::PduError;
 
 pub mod conference_create;
 
@@ -43,7 +46,7 @@ macro_rules! user_header_try {
     ($e:expr) => {
         match $e {
             Ok(user_header) => user_header,
-            Err(e) if matches!(e.kind(), PduErrorKind::NotEnoughBytes { .. }) => break,
+            Err(e) if matches!(e.kind(), DecodeErrorKind::NotEnoughBytes { .. }) => break,
             Err(e) => return Err(e),
         }
     };
@@ -79,8 +82,8 @@ impl ClientGccBlocks {
     }
 }
 
-impl PduEncode for ClientGccBlocks {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientGccBlocks {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         UserDataHeader::encode(dst, ClientGccType::CoreData, &self.core)?;
@@ -138,8 +141,8 @@ impl PduEncode for ClientGccBlocks {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientGccBlocks {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientGccBlocks {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let mut core = None;
         let mut security = None;
         let mut network = None;
@@ -165,8 +168,8 @@ impl<'de> PduDecode<'de> for ClientGccBlocks {
         }
 
         Ok(Self {
-            core: core.ok_or_else(|| invalid_message_err!("core", "required GCC core is absent"))?,
-            security: security.ok_or_else(|| invalid_message_err!("security", "required GCC security is absent"))?,
+            core: core.ok_or_else(|| invalid_field_err!("core", "required GCC core is absent"))?,
+            security: security.ok_or_else(|| invalid_field_err!("security", "required GCC security is absent"))?,
             network,
             cluster,
             monitor,
@@ -197,8 +200,8 @@ impl ServerGccBlocks {
     }
 }
 
-impl PduEncode for ServerGccBlocks {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerGccBlocks {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         UserDataHeader::encode(dst, ServerGccType::CoreData, &self.core)?;
         UserDataHeader::encode(dst, ServerGccType::NetworkData, &self.network)?;
         UserDataHeader::encode(dst, ServerGccType::SecurityData, &self.security)?;
@@ -231,8 +234,8 @@ impl PduEncode for ServerGccBlocks {
     }
 }
 
-impl<'de> PduDecode<'de> for ServerGccBlocks {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ServerGccBlocks {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let mut core = None;
         let mut network = None;
         let mut security = None;
@@ -252,9 +255,9 @@ impl<'de> PduDecode<'de> for ServerGccBlocks {
         }
 
         Ok(Self {
-            core: core.ok_or_else(|| invalid_message_err!("core", "required GCC core is absent"))?,
-            network: network.ok_or_else(|| invalid_message_err!("network", "required GCC network is absent"))?,
-            security: security.ok_or_else(|| invalid_message_err!("security", "required GCC security is absent"))?,
+            core: core.ok_or_else(|| invalid_field_err!("core", "required GCC core is absent"))?,
+            network: network.ok_or_else(|| invalid_field_err!("network", "required GCC network is absent"))?,
+            security: security.ok_or_else(|| invalid_field_err!("security", "required GCC security is absent"))?,
             message_channel,
             multi_transport_channel,
         })
@@ -290,10 +293,10 @@ pub struct UserDataHeader;
 impl UserDataHeader {
     const FIXED_PART_SIZE: usize = 2 /* blockType */ + 2 /* blockLen */;
 
-    pub fn encode<T, B>(dst: &mut WriteCursor<'_>, block_type: T, block: &B) -> PduResult<()>
+    pub fn encode<T, B>(dst: &mut WriteCursor<'_>, block_type: T, block: &B) -> EncodeResult<()>
     where
         T: ToPrimitive,
-        B: PduEncode,
+        B: Encode,
     {
         ensure_fixed_part_size!(in: dst);
 
@@ -304,18 +307,18 @@ impl UserDataHeader {
         Ok(())
     }
 
-    pub fn decode<'de, T>(src: &mut ReadCursor<'de>) -> PduResult<(T, &'de [u8])>
+    pub fn decode<'de, T>(src: &mut ReadCursor<'de>) -> DecodeResult<(T, &'de [u8])>
     where
         T: FromPrimitive,
     {
         ensure_fixed_part_size!(in: src);
 
         let block_type =
-            T::from_u16(src.read_u16()).ok_or_else(|| invalid_message_err!("blockType", "invalid GCC type"))?;
+            T::from_u16(src.read_u16()).ok_or_else(|| invalid_field_err!("blockType", "invalid GCC type"))?;
         let block_length: usize = cast_length!("blockLen", src.read_u16())?;
 
         if block_length <= USER_DATA_HEADER_SIZE {
-            return Err(invalid_message_err!("blockLen", "invalid UserDataHeader length"));
+            return Err(invalid_field_err!("blockLen", "invalid UserDataHeader length"));
         }
 
         let len = block_length - USER_DATA_HEADER_SIZE;

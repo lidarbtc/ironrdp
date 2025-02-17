@@ -1,12 +1,15 @@
 use bitflags::bitflags;
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 use tap::Pipe as _;
 
 use super::{RdpVersion, VERSION_SIZE};
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::nego::SecurityProtocol;
-use crate::{utils, PduDecode, PduEncode, PduResult};
+use crate::utils;
 
 pub const IME_FILE_NAME_SIZE: usize = 64;
 
@@ -93,8 +96,8 @@ impl ClientCoreData {
     }
 }
 
-impl PduEncode for ClientCoreData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientCoreData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let mut client_name_dst = utils::to_utf16_bytes(self.client_name.as_ref());
@@ -129,8 +132,8 @@ impl PduEncode for ClientCoreData {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientCoreData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientCoreData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let version = src.read_u32().pipe(RdpVersion);
@@ -139,11 +142,11 @@ impl<'de> PduDecode<'de> for ClientCoreData {
         let color_depth = src
             .read_u16()
             .pipe(ColorDepth::from_u16)
-            .ok_or_else(|| invalid_message_err!("colorDepth", "invalid color depth"))?;
+            .ok_or_else(|| invalid_field_err!("colorDepth", "invalid color depth"))?;
         let sec_access_sequence = src
             .read_u16()
             .pipe(SecureAccessSequence::from_u16)
-            .ok_or_else(|| invalid_message_err!("secAccessSequence", "invalid secure access sequence"))?;
+            .ok_or_else(|| invalid_field_err!("secAccessSequence", "invalid secure access sequence"))?;
         let keyboard_layout = src.read_u32();
         let client_build = src.read_u32();
 
@@ -155,7 +158,7 @@ impl<'de> PduDecode<'de> for ClientCoreData {
         let keyboard_type = src
             .read_u32()
             .pipe(KeyboardType::from_u32)
-            .ok_or_else(|| invalid_message_err!("keyboardType", "invalid keyboard type"))?;
+            .ok_or_else(|| invalid_field_err!("keyboardType", "invalid keyboard type"))?;
         let keyboard_subtype = src.read_u32();
         let keyboard_functional_keys_count = src.read_u32();
 
@@ -215,8 +218,8 @@ impl ClientCoreOptionalData {
     const NAME: &'static str = "ClientCoreOptionalData";
 }
 
-impl PduEncode for ClientCoreOptionalData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientCoreOptionalData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         if let Some(value) = self.post_beta2_color_depth {
@@ -225,7 +228,7 @@ impl PduEncode for ClientCoreOptionalData {
 
         if let Some(value) = self.client_product_id {
             if self.post_beta2_color_depth.is_none() {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "postBeta2ColorDepth",
                     "postBeta2ColorDepth must be present"
                 ));
@@ -235,31 +238,28 @@ impl PduEncode for ClientCoreOptionalData {
 
         if let Some(value) = self.serial_number {
             if self.client_product_id.is_none() {
-                return Err(invalid_message_err!(
-                    "clientProductId",
-                    "clientProductId must be present"
-                ));
+                return Err(invalid_field_err!("clientProductId", "clientProductId must be present"));
             }
             dst.write_u32(value);
         }
 
         if let Some(value) = self.high_color_depth {
             if self.serial_number.is_none() {
-                return Err(invalid_message_err!("serialNumber", "serialNumber must be present"));
+                return Err(invalid_field_err!("serialNumber", "serialNumber must be present"));
             }
             dst.write_u16(value.to_u16().unwrap());
         }
 
         if let Some(value) = self.supported_color_depths {
             if self.high_color_depth.is_none() {
-                return Err(invalid_message_err!("highColorDepth", "highColorDepth must be present"));
+                return Err(invalid_field_err!("highColorDepth", "highColorDepth must be present"));
             }
             dst.write_u16(value.bits());
         }
 
         if let Some(value) = self.early_capability_flags {
             if self.supported_color_depths.is_none() {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "supportedColorDepths",
                     "supportedColorDepths must be present"
                 ));
@@ -269,7 +269,7 @@ impl PduEncode for ClientCoreOptionalData {
 
         if let Some(ref value) = self.dig_product_id {
             if self.early_capability_flags.is_none() {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "earlyCapabilityFlags",
                     "earlyCapabilityFlags must be present"
                 ));
@@ -283,7 +283,7 @@ impl PduEncode for ClientCoreOptionalData {
 
         if let Some(value) = self.connection_type {
             if self.dig_product_id.is_none() {
-                return Err(invalid_message_err!("digProductId", "digProductId must be present"));
+                return Err(invalid_field_err!("digProductId", "digProductId must be present"));
             }
             dst.write_u8(value.to_u8().unwrap());
             write_padding!(dst, 1);
@@ -291,14 +291,14 @@ impl PduEncode for ClientCoreOptionalData {
 
         if let Some(value) = self.server_selected_protocol {
             if self.connection_type.is_none() {
-                return Err(invalid_message_err!("connectionType", "connectionType must be present"));
+                return Err(invalid_field_err!("connectionType", "connectionType must be present"));
             }
             dst.write_u32(value.bits())
         }
 
         if let Some(value) = self.desktop_physical_width {
             if self.server_selected_protocol.is_none() {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "serverSelectedProtocol",
                     "serverSelectedProtocol must be present"
                 ));
@@ -308,7 +308,7 @@ impl PduEncode for ClientCoreOptionalData {
 
         if let Some(value) = self.desktop_physical_height {
             if self.desktop_physical_width.is_none() {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "desktopPhysicalWidth",
                     "desktopPhysicalWidth must be present"
                 ));
@@ -318,7 +318,7 @@ impl PduEncode for ClientCoreOptionalData {
 
         if let Some(value) = self.desktop_orientation {
             if self.desktop_physical_height.is_none() {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "desktopPhysicalHeight",
                     "desktopPhysicalHeight must be present"
                 ));
@@ -328,7 +328,7 @@ impl PduEncode for ClientCoreOptionalData {
 
         if let Some(value) = self.desktop_scale_factor {
             if self.desktop_orientation.is_none() {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "desktopOrientation",
                     "desktopOrientation must be present"
                 ));
@@ -338,7 +338,7 @@ impl PduEncode for ClientCoreOptionalData {
 
         if let Some(value) = self.device_scale_factor {
             if self.desktop_scale_factor.is_none() {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "desktopScaleFactor",
                     "desktopScaleFactor must be present"
                 ));
@@ -412,34 +412,31 @@ macro_rules! try_or_return {
     };
 }
 
-impl<'de> PduDecode<'de> for ClientCoreOptionalData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientCoreOptionalData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let mut optional_data = Self::default();
 
         optional_data.post_beta2_color_depth = Some(
-            ColorDepth::from_u16(try_or_return!(src.try_read_u16("postBeta2ColorDepth"), optional_data))
-                .ok_or_else(|| invalid_message_err!("postBeta2ColorDepth", "invalid color depth"))?,
+            ColorDepth::from_u16(try_or_return!(src.try_read_u16(), optional_data))
+                .ok_or_else(|| invalid_field_err!("postBeta2ColorDepth", "invalid color depth"))?,
         );
 
-        optional_data.client_product_id = Some(try_or_return!(src.try_read_u16("clientProductId"), optional_data));
-        optional_data.serial_number = Some(try_or_return!(src.try_read_u32("serialNumber"), optional_data));
+        optional_data.client_product_id = Some(try_or_return!(src.try_read_u16(), optional_data));
+        optional_data.serial_number = Some(try_or_return!(src.try_read_u32(), optional_data));
 
         optional_data.high_color_depth = Some(
-            HighColorDepth::from_u16(try_or_return!(src.try_read_u16("highColorDepth"), optional_data))
-                .ok_or_else(|| invalid_message_err!("highColorDepth", "invalid color depth"))?,
+            HighColorDepth::from_u16(try_or_return!(src.try_read_u16(), optional_data))
+                .ok_or_else(|| invalid_field_err!("highColorDepth", "invalid color depth"))?,
         );
 
         optional_data.supported_color_depths = Some(
-            SupportedColorDepths::from_bits(try_or_return!(src.try_read_u16("supportedColorDepths"), optional_data))
-                .ok_or_else(|| invalid_message_err!("supportedColorDepths", "invalid supported color depths"))?,
+            SupportedColorDepths::from_bits(try_or_return!(src.try_read_u16(), optional_data))
+                .ok_or_else(|| invalid_field_err!("supportedColorDepths", "invalid supported color depths"))?,
         );
 
         optional_data.early_capability_flags = Some(
-            ClientEarlyCapabilityFlags::from_bits(try_or_return!(
-                src.try_read_u16("earlyCapabilityFlags"),
-                optional_data
-            ))
-            .ok_or_else(|| invalid_message_err!("earlyCapabilityFlags", "invalid early capability flags"))?,
+            ClientEarlyCapabilityFlags::from_bits(try_or_return!(src.try_read_u16(), optional_data))
+                .ok_or_else(|| invalid_field_err!("earlyCapabilityFlags", "invalid early capability flags"))?,
         );
 
         if src.len() < DIG_PRODUCT_ID_SIZE {
@@ -450,28 +447,23 @@ impl<'de> PduDecode<'de> for ClientCoreOptionalData {
         optional_data.dig_product_id = Some(utils::from_utf16_bytes(dig_product_id).trim_end_matches('\u{0}').into());
 
         optional_data.connection_type = Some(
-            ConnectionType::from_u8(try_or_return!(src.try_read_u8("connectionType"), optional_data))
-                .ok_or_else(|| invalid_message_err!("connectionType", "invalid connection type"))?,
+            ConnectionType::from_u8(try_or_return!(src.try_read_u8(), optional_data))
+                .ok_or_else(|| invalid_field_err!("connectionType", "invalid connection type"))?,
         );
 
-        try_or_return!(src.try_read_u8("pad1octet"), optional_data);
+        try_or_return!(src.try_read_u8(), optional_data);
 
         optional_data.server_selected_protocol = Some(
-            SecurityProtocol::from_bits(try_or_return!(
-                src.try_read_u32("serverSelectedProtocol"),
-                optional_data
-            ))
-            .ok_or_else(|| invalid_message_err!("serverSelectedProtocol", "invalid security protocol"))?,
+            SecurityProtocol::from_bits(try_or_return!(src.try_read_u32(), optional_data))
+                .ok_or_else(|| invalid_field_err!("serverSelectedProtocol", "invalid security protocol"))?,
         );
 
-        optional_data.desktop_physical_width =
-            Some(try_or_return!(src.try_read_u32("desktopPhysicalWidth"), optional_data));
+        optional_data.desktop_physical_width = Some(try_or_return!(src.try_read_u32(), optional_data));
         // physical height must be present, if the physical width is present
         optional_data.desktop_physical_height = Some(src.read_u32());
 
-        optional_data.desktop_orientation = Some(try_or_return!(src.try_read_u16("desktopOrientation"), optional_data));
-        optional_data.desktop_scale_factor =
-            Some(try_or_return!(src.try_read_u32("desktopScaleFactor"), optional_data));
+        optional_data.desktop_orientation = Some(try_or_return!(src.try_read_u16(), optional_data));
+        optional_data.desktop_scale_factor = Some(try_or_return!(src.try_read_u32(), optional_data));
         // device scale factor must be present, if the desktop scale factor is present
         optional_data.device_scale_factor = Some(src.read_u32());
 

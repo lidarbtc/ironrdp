@@ -1,41 +1,38 @@
 //! Example of utilizing `ironrdp-server` crate.
 
-#![allow(unused_crate_dependencies)] // false positives because there is both a library and a binary
+#![allow(unused_crate_dependencies)] // False positives because there are both a library and a binary.
 #![allow(clippy::print_stdout)]
 
 #[macro_use]
 extern crate tracing;
 
-use std::fs::File;
-use std::io::BufReader;
-use std::net::{IpAddr, SocketAddr};
-use std::num::NonZeroU16;
+use core::num::NonZeroU16;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
-use ironrdp_cliprdr::backend::{CliprdrBackend, CliprdrBackendFactory};
-use ironrdp_cliprdr_native::StubCliprdrBackend;
-use ironrdp_connector::DesktopSize;
-use ironrdp_rdpsnd::pdu::ClientAudioFormatPdu;
-use ironrdp_rdpsnd::server::{RdpsndServerHandler, RdpsndServerMessage};
-use ironrdp_server::{
-    BitmapUpdate, CliprdrServerFactory, DisplayUpdate, KeyboardEvent, MouseEvent, PixelFormat, PixelOrder, RdpServer,
-    RdpServerDisplay, RdpServerDisplayUpdates, RdpServerInputHandler, ServerEvent, ServerEventSender,
-    SoundServerFactory,
+use ironrdp::cliprdr::backend::{CliprdrBackend, CliprdrBackendFactory};
+use ironrdp::connector::DesktopSize;
+use ironrdp::rdpsnd::pdu::ClientAudioFormatPdu;
+use ironrdp::rdpsnd::pdu::{AudioFormat, WaveFormat};
+use ironrdp::rdpsnd::server::{RdpsndServerHandler, RdpsndServerMessage};
+use ironrdp::server::tokio::sync::mpsc::UnboundedSender;
+use ironrdp::server::tokio::time::{self, sleep, Duration};
+use ironrdp::server::{
+    tokio, BitmapUpdate, CliprdrServerFactory, Credentials, DisplayUpdate, KeyboardEvent, MouseEvent, PixelFormat,
+    PixelOrder, RdpServer, RdpServerDisplay, RdpServerDisplayUpdates, RdpServerInputHandler, ServerEvent,
+    ServerEventSender, SoundServerFactory, TlsIdentityCtx,
 };
+use ironrdp_cliprdr_native::StubCliprdrBackend;
 use rand::prelude::*;
-use rustls_pemfile::{certs, pkcs8_private_keys};
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::time::{self, sleep, Duration};
-use tokio_rustls::rustls;
-use tokio_rustls::TlsAcceptor;
 
 const HELP: &str = "\
 USAGE:
-  cargo run --example=server -- [--host <HOSTNAME>] [--port <PORT>] [--cert <CERTIFICATE>] [--key <CERTIFICATE KEY>]
+  cargo run --example=server -- [--bind-addr <SOCKET ADDRESS>] [--cert <CERTIFICATE>] [--key <CERTIFICATE KEY>] [--user USERNAME] [--pass PASSWORD] [--sec tls|hybrid]
 ";
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), anyhow::Error> {
     let action = match parse_args() {
         Ok(action) => action,
@@ -52,7 +49,14 @@ async fn main() -> Result<(), anyhow::Error> {
             println!("{HELP}");
             Ok(())
         }
-        Action::Run { host, port, cert, key } => run(host, port, cert, key).await,
+        Action::Run {
+            bind_addr,
+            hybrid,
+            user,
+            pass,
+            cert,
+            key,
+        } => run(bind_addr, hybrid, user, pass, cert, key).await,
     }
 }
 
@@ -60,10 +64,12 @@ async fn main() -> Result<(), anyhow::Error> {
 enum Action {
     ShowHelp,
     Run {
-        host: String,
-        port: u16,
-        cert: Option<String>,
-        key: Option<String>,
+        bind_addr: SocketAddr,
+        hybrid: bool,
+        user: String,
+        pass: String,
+        cert: Option<PathBuf>,
+        key: Option<PathBuf>,
     },
 }
 
@@ -73,13 +79,31 @@ fn parse_args() -> anyhow::Result<Action> {
     let action = if args.contains(["-h", "--help"]) {
         Action::ShowHelp
     } else {
-        let host = args
-            .opt_value_from_str("--host")?
-            .unwrap_or_else(|| String::from("localhost"));
-        let port = args.opt_value_from_str("--port")?.unwrap_or(3389);
+        let bind_addr = args
+            .opt_value_from_str("--bind-addr")?
+            .unwrap_or_else(|| "127.0.0.1:3389".parse().expect("valid hardcoded SocketAddr string"));
+
+        let sec = args.opt_value_from_str("--sec")?.unwrap_or_else(|| "hybrid".to_owned());
+        let hybrid = match sec.as_ref() {
+            "tls" => false,
+            "hybrid" => true,
+            _ => anyhow::bail!("Unhandled security: '{sec}'"),
+        };
+
         let cert = args.opt_value_from_str("--cert")?;
         let key = args.opt_value_from_str("--key")?;
-        Action::Run { host, port, cert, key }
+
+        let user = args.opt_value_from_str("--user")?.unwrap_or_else(|| "user".to_owned());
+        let pass = args.opt_value_from_str("--pass")?.unwrap_or_else(|| "pass".to_owned());
+
+        Action::Run {
+            bind_addr,
+            hybrid,
+            user,
+            pass,
+            cert,
+            key,
+        }
     };
 
     Ok(action)
@@ -104,26 +128,6 @@ fn setup_logging() -> anyhow::Result<()> {
         .context("failed to set tracing global subscriber")?;
 
     Ok(())
-}
-
-fn acceptor(cert_path: &str, key_path: &str) -> anyhow::Result<TlsAcceptor> {
-    let cert = certs(&mut BufReader::new(File::open(cert_path)?))
-        .next()
-        .context("no certificate")??;
-    let key = pkcs8_private_keys(&mut BufReader::new(File::open(key_path)?))
-        .next()
-        .context("no private key")?
-        .map(rustls::pki_types::PrivateKeyDer::from)?;
-
-    let mut server_config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![cert], key)
-        .context("bad certificate/key")?;
-
-    // This adds support for the SSLKEYLOGFILE env variable (https://wiki.wireshark.org/TLS#using-the-pre-master-secret)
-    server_config.key_log = Arc::new(rustls::KeyLogFile::new());
-
-    Ok(TlsAcceptor::from(Arc::new(server_config)))
 }
 
 #[derive(Clone, Debug)]
@@ -167,9 +171,9 @@ impl RdpServerDisplayUpdates for DisplayUpdates {
             .unwrap();
         let mut data = Vec::with_capacity(capacity);
         for _ in 0..(data.capacity() / 4) {
-            data.push(rng.gen());
-            data.push(rng.gen());
-            data.push(rng.gen());
+            data.push(rng.r#gen());
+            data.push(rng.r#gen());
+            data.push(rng.r#gen());
             data.push(255);
         }
 
@@ -202,7 +206,7 @@ impl RdpServerDisplay for Handler {
     }
 }
 
-struct StubCliprdrServerFactory {}
+struct StubCliprdrServerFactory;
 
 impl CliprdrBackendFactory for StubCliprdrServerFactory {
     fn build_cliprdr_backend(&self) -> Box<dyn CliprdrBackend> {
@@ -248,51 +252,92 @@ struct SndHandler {
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl RdpsndServerHandler for SndHandler {
-    fn get_formats(&self) -> &[ironrdp_rdpsnd::pdu::AudioFormat] {
-        use ironrdp_rdpsnd::pdu::{AudioFormat, WaveFormat};
+impl SndHandler {
+    fn choose_format(&self, client_formats: &[AudioFormat]) -> Option<u16> {
+        for (n, fmt) in client_formats.iter().enumerate() {
+            if self.get_formats().contains(fmt) {
+                return u16::try_from(n).ok();
+            }
+        }
+        None
+    }
+}
 
-        &[AudioFormat {
-            format: WaveFormat::PCM,
-            n_channels: 2,
-            n_samples_per_sec: 44100,
-            n_avg_bytes_per_sec: 176400,
-            n_block_align: 4,
-            bits_per_sample: 16,
-            data: None,
-        }]
+impl RdpsndServerHandler for SndHandler {
+    fn get_formats(&self) -> &[AudioFormat] {
+        &[
+            AudioFormat {
+                format: WaveFormat::OPUS,
+                n_channels: 2,
+                n_samples_per_sec: 48000,
+                n_avg_bytes_per_sec: 192000,
+                n_block_align: 4,
+                bits_per_sample: 16,
+                data: None,
+            },
+            AudioFormat {
+                format: WaveFormat::PCM,
+                n_channels: 2,
+                n_samples_per_sec: 44100,
+                n_avg_bytes_per_sec: 176400,
+                n_block_align: 4,
+                bits_per_sample: 16,
+                data: None,
+            },
+        ]
     }
 
     fn start(&mut self, client_format: &ClientAudioFormatPdu) -> Option<u16> {
-        async fn generate_sine_wave(sample_rate: u32, frequency: f32, duration_ms: u64) -> Vec<u8> {
-            use std::f32::consts::PI;
+        debug!(?client_format);
 
-            let total_samples = u64::from(sample_rate / 1000).checked_mul(duration_ms).unwrap();
-            let samples_per_wave_length = sample_rate as f32 / frequency;
-            let amplitude = 32767.0; // Max amplitude for 16-bit audio
+        let Some(nfmt) = self.choose_format(&client_format.formats) else {
+            return Some(0);
+        };
 
-            let capacity = total_samples.checked_mul(2 + 2).unwrap();
-            let mut samples = Vec::with_capacity(usize::try_from(capacity).unwrap());
+        let fmt = client_format.formats[usize::from(nfmt)].clone();
 
-            for n in 0..total_samples {
-                let t = (n as f32 % samples_per_wave_length) / samples_per_wave_length;
-                let sample = (t * 2.0 * PI).sin();
-                #[allow(clippy::cast_possible_truncation)]
-                let sample = (sample * amplitude) as i16;
-                samples.extend_from_slice(&sample.to_le_bytes());
-                samples.extend_from_slice(&sample.to_le_bytes());
+        let mut opus_enc = if fmt.format == WaveFormat::OPUS {
+            let n_channels: opus::Channels = match fmt.n_channels {
+                1 => opus::Channels::Mono,
+                2 => opus::Channels::Stereo,
+                n => {
+                    warn!("Invalid OPUS channels: {}", n);
+                    return Some(0);
+                }
+            };
+
+            match opus::Encoder::new(fmt.n_samples_per_sec, n_channels, opus::Application::Audio) {
+                Ok(enc) => Some(enc),
+                Err(err) => {
+                    warn!("Failed to create OPUS encoder: {}", err);
+                    return Some(0);
+                }
             }
-
-            samples
-        }
+        } else {
+            None
+        };
 
         let inner = Arc::clone(&self.inner);
         self.task = Some(tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_millis(100));
+            let mut interval = time::interval(Duration::from_millis(20));
             let mut ts = 0;
+            let mut phase = 0.0f32;
             loop {
                 interval.tick().await;
-                let data = generate_sine_wave(44100, 440.0, 100).await;
+                let wave = generate_sine_wave(fmt.n_samples_per_sec, 440.0, 20, &mut phase);
+
+                let data = if let Some(ref mut enc) = opus_enc {
+                    match enc.encode_vec(&wave, wave.len()) {
+                        Ok(data) => data,
+                        Err(err) => {
+                            warn!("Failed to encode with OPUS: {}", err);
+                            return;
+                        }
+                    }
+                } else {
+                    wave.into_iter().flat_map(|value| value.to_le_bytes()).collect()
+                };
+
                 let inner = inner.lock().unwrap();
                 if let Some(sender) = inner.ev_sender.as_ref() {
                     let _ = sender.send(ServerEvent::Rdpsnd(RdpsndServerMessage::Wave(data, ts)));
@@ -301,8 +346,7 @@ impl RdpsndServerHandler for SndHandler {
             }
         }));
 
-        debug!(?client_format);
-        Some(0)
+        Some(nfmt)
     }
 
     fn stop(&mut self) {
@@ -313,35 +357,78 @@ impl RdpsndServerHandler for SndHandler {
     }
 }
 
-async fn run(host: String, port: u16, cert: Option<String>, key: Option<String>) -> anyhow::Result<()> {
-    info!(host, port, cert, key, "run");
+fn generate_sine_wave(sample_rate: u32, frequency: f32, duration_ms: u64, phase: &mut f32) -> Vec<i16> {
+    use core::f32::consts::PI;
+
+    let total_samples = (u64::from(sample_rate) * duration_ms) / 1000;
+    let delta_phase = 2.0 * PI * frequency / sample_rate as f32;
+    let amplitude = 32767.0; // Max amplitude for 16-bit audio
+
+    let capacity = (total_samples as usize) * 2; // 2 channels
+    let mut samples = Vec::with_capacity(capacity);
+
+    for _ in 0..total_samples {
+        let sample = (*phase).sin();
+        *phase += delta_phase;
+        // Wrap phase to maintain precision and avoid overflow
+        *phase %= 2.0 * PI;
+
+        #[allow(clippy::cast_possible_truncation)]
+        let sample_i16 = (sample * amplitude) as i16;
+
+        // Write same sample to both channels (stereo)
+        samples.push(sample_i16);
+        samples.push(sample_i16);
+    }
+
+    samples
+}
+
+async fn run(
+    bind_addr: SocketAddr,
+    hybrid: bool,
+    username: String,
+    password: String,
+    cert: Option<PathBuf>,
+    key: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    info!(%bind_addr, ?cert, ?key, "run");
+
     let handler = Handler::new();
 
-    let tls = cert
-        .as_ref()
-        .zip(key.as_ref())
-        .map(|(cert, key)| acceptor(cert, key).unwrap());
+    let server_builder = RdpServer::builder().with_addr(bind_addr);
 
-    let addr = SocketAddr::new(host.parse::<IpAddr>()?, port);
+    let server_builder = if let Some((cert_path, key_path)) = cert.as_deref().zip(key.as_deref()) {
+        let identity = TlsIdentityCtx::init_from_paths(cert_path, key_path).context("failed to init TLS identity")?;
+        let acceptor = identity.make_acceptor().context("failed to build TLS acceptor")?;
 
-    let server = RdpServer::builder().with_addr(addr);
-    let server = if let Some(tls) = tls {
-        server.with_tls(tls)
+        if hybrid {
+            server_builder.with_hybrid(acceptor, identity.pub_key)
+        } else {
+            server_builder.with_tls(acceptor)
+        }
     } else {
-        server.with_no_security()
+        server_builder.with_no_security()
     };
 
-    let cliprdr = Box::new(StubCliprdrServerFactory {});
+    let cliprdr = Box::new(StubCliprdrServerFactory);
+
     let sound = Box::new(StubSoundServerFactory {
         inner: Arc::new(Mutex::new(Inner { ev_sender: None })),
     });
 
-    let mut server = server
+    let mut server = server_builder
         .with_input_handler(handler.clone())
         .with_display_handler(handler.clone())
         .with_cliprdr_factory(Some(cliprdr))
         .with_sound_factory(Some(sound))
         .build();
+
+    server.set_credentials(Some(Credentials {
+        username,
+        password,
+        domain: None,
+    }));
 
     server.run().await
 }

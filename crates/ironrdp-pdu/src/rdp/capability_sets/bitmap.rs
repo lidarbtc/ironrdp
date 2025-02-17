@@ -2,9 +2,9 @@
 mod tests;
 
 use bitflags::bitflags;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{
+    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 
 const BITMAP_LENGTH: usize = 24;
 
@@ -33,8 +33,8 @@ impl Bitmap {
     const FIXED_PART_SIZE: usize = BITMAP_LENGTH;
 }
 
-impl PduEncode for Bitmap {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Bitmap {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.pref_bits_per_pix);
@@ -63,8 +63,8 @@ impl PduEncode for Bitmap {
     }
 }
 
-impl<'de> PduDecode<'de> for Bitmap {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Bitmap {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let pref_bits_per_pix = src.read_u16();
@@ -79,7 +79,7 @@ impl<'de> PduDecode<'de> for Bitmap {
 
         let is_bitmap_compress_flag_set = src.read_u16() != 0;
         if !is_bitmap_compress_flag_set {
-            return Err(invalid_message_err!(
+            return Err(invalid_field_err!(
                 "isBitmapCompressFlagSet",
                 "invalid compression flag"
             ));

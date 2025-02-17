@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://cdnweb.devolutions.net/images/projects/devolutions/logos/devolutions-icon-shadow.svg")]
 #![allow(clippy::arithmetic_side_effects)] // FIXME: remove
 #![allow(clippy::cast_lossless)] // FIXME: remove
 #![allow(clippy::cast_possible_truncation)] // FIXME: remove
@@ -9,10 +10,11 @@ pub mod backend;
 pub mod pdu;
 
 use backend::CliprdrBackend;
+use ironrdp_core::{decode, AsAny, EncodeResult};
 use ironrdp_pdu::gcc::ChannelName;
-use ironrdp_pdu::{decode, PduResult};
+use ironrdp_pdu::{decode_err, encode_err, PduResult};
 use ironrdp_svc::{
-    AsAny, ChannelFlags, CompressionCondition, SvcClientProcessor, SvcMessage, SvcProcessor, SvcProcessorMessages,
+    ChannelFlags, CompressionCondition, SvcClientProcessor, SvcMessage, SvcProcessor, SvcProcessorMessages,
     SvcServerProcessor,
 };
 use pdu::{
@@ -45,7 +47,7 @@ enum CliprdrState {
     Failed,
 }
 
-pub trait Role: std::fmt::Debug + Send + 'static {
+pub trait Role: core::fmt::Debug + Send + 'static {
     fn is_server() -> bool;
 }
 
@@ -55,7 +57,7 @@ pub struct Cliprdr<R: Role> {
     backend: Box<dyn CliprdrBackend>,
     capabilities: Capabilities,
     state: CliprdrState,
-    _marker: std::marker::PhantomData<R>,
+    _marker: core::marker::PhantomData<R>,
 }
 
 pub type CliprdrClient = Cliprdr<Client>;
@@ -98,7 +100,7 @@ impl<R: Role> Cliprdr<R> {
             backend,
             state: CliprdrState::Initialization,
             capabilities: Capabilities::new(ClipboardProtocolVersion::V2, flags),
-            _marker: std::marker::PhantomData,
+            _marker: core::marker::PhantomData,
         }
     }
 
@@ -116,7 +118,7 @@ impl<R: Role> Cliprdr<R> {
             .contains(ClipboardGeneralCapabilityFlags::USE_LONG_FORMAT_NAMES)
     }
 
-    fn build_format_list(&self, formats: &[ClipboardFormat]) -> PduResult<FormatList<'static>> {
+    fn build_format_list(&self, formats: &[ClipboardFormat]) -> EncodeResult<FormatList<'static>> {
         FormatList::new_unicode(formats, self.are_long_format_names_enabled())
     }
 
@@ -232,16 +234,20 @@ impl<R: Role> Cliprdr<R> {
         match (self.state, R::is_server()) {
             // When user initiates copy, we should send format list to server.
             (CliprdrState::Ready, _) => {
-                pdus.push(ClipboardPdu::FormatList(self.build_format_list(available_formats)?));
+                pdus.push(ClipboardPdu::FormatList(
+                    self.build_format_list(available_formats).map_err(|e| encode_err!(e))?,
+                ));
             }
             (CliprdrState::Initialization, false) => {
                 // During initialization state, first copy action is synthetic and should be sent along with
                 // capabilities and temporary directory PDUs.
                 pdus.push(ClipboardPdu::Capabilities(self.capabilities.clone()));
-                pdus.push(ClipboardPdu::TemporaryDirectory(ClientTemporaryDirectory::new(
-                    self.backend.temporary_directory(),
-                )?));
-                pdus.push(ClipboardPdu::FormatList(self.build_format_list(available_formats)?));
+                pdus.push(ClipboardPdu::TemporaryDirectory(
+                    ClientTemporaryDirectory::new(self.backend.temporary_directory()).map_err(|e| encode_err!(e))?,
+                ));
+                pdus.push(ClipboardPdu::FormatList(
+                    self.build_format_list(available_formats).map_err(|e| encode_err!(e))?,
+                ));
             }
             _ => {
                 error!(?self.state, "Attempted to initiate copy in incorrect state");
@@ -285,7 +291,7 @@ impl<R: Role> SvcProcessor for Cliprdr<R> {
     }
 
     fn process(&mut self, payload: &[u8]) -> PduResult<Vec<SvcMessage>> {
-        let pdu = decode::<ClipboardPdu<'_>>(payload)?;
+        let pdu = decode::<ClipboardPdu<'_>>(payload).map_err(|e| decode_err!(e))?;
 
         if self.state == CliprdrState::Failed {
             error!("Attempted to process clipboard static virtual channel in failed state");

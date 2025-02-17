@@ -1,8 +1,9 @@
 use std::borrow::Cow;
 
 use bitflags::bitflags;
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::{ensure_fixed_part_size, ensure_size, PduDecode, PduEncode, PduResult};
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 
 bitflags! {
     /// Represents `mappingMode` fields of `CLIPRDR_MFPICT` structure.
@@ -34,7 +35,7 @@ bitflags! {
 
 /// Represents `CLIPRDR_MFPICT`
 ///
-/// NOTE: `PduDecode` implementation will read all remaining data in cursor as metafile contents.
+/// NOTE: `Decode` implementation will read all remaining data in cursor as metafile contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackedMetafile<'a> {
     pub mapping_mode: PackedMetafileMappingMode,
@@ -67,8 +68,8 @@ impl PackedMetafile<'_> {
     }
 }
 
-impl PduEncode for PackedMetafile<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for PackedMetafile<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(self.mapping_mode.bits());
@@ -88,8 +89,8 @@ impl PduEncode for PackedMetafile<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for PackedMetafile<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for PackedMetafile<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let mapping_mode = PackedMetafileMappingMode::from_bits_truncate(src.read_u32());

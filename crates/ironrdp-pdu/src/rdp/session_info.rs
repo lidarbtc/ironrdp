@@ -1,11 +1,14 @@
 use std::io;
 
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive as _, ToPrimitive as _};
 use thiserror::Error;
 
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduError, PduResult};
+use crate::PduError;
 
 #[cfg(test)]
 mod tests;
@@ -34,8 +37,8 @@ impl SaveSessionInfoPdu {
     const FIXED_PART_SIZE: usize = INFO_TYPE_FIELD_SIZE;
 }
 
-impl PduEncode for SaveSessionInfoPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for SaveSessionInfoPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.info_type.to_u32().unwrap());
@@ -74,12 +77,12 @@ impl PduEncode for SaveSessionInfoPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for SaveSessionInfoPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for SaveSessionInfoPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let info_type = InfoType::from_u32(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("infoType", "invalid save session info type"))?;
+            .ok_or_else(|| invalid_field_err!("infoType", "invalid save session info type"))?;
 
         let info_data = match info_type {
             InfoType::Logon => InfoData::LogonInfoV1(LogonInfoVersion1::decode(src)?),

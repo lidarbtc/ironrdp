@@ -1,15 +1,16 @@
-use ironrdp_pdu::PduResult;
+use std::ffi::CString;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::{AsFd, AsRawFd};
+use std::os::unix::fs::MetadataExt;
+
+use ironrdp_core::impl_as_any;
+use ironrdp_pdu::{encode_err, PduResult};
 use ironrdp_rdpdr::pdu::efs::*;
 use ironrdp_rdpdr::pdu::esc::{ScardCall, ScardIoCtlCode};
 use ironrdp_rdpdr::pdu::RdpdrPdu;
 use ironrdp_rdpdr::RdpdrBackend;
-use ironrdp_svc::{impl_as_any, SvcMessage};
+use ironrdp_svc::SvcMessage;
 use nix::dir::{Dir, OwningIter};
-use std::ffi::CString;
-use std::io::Read;
-use std::io::{Seek, SeekFrom, Write};
-use std::os::fd::{AsFd, AsRawFd};
-use std::os::unix::fs::MetadataExt;
 
 #[derive(Debug, Default)]
 pub struct NixRdpdrBackend {
@@ -265,6 +266,7 @@ pub(crate) fn query_volume_information(
         Some(file) => {
             if let Ok(statvfs) = nix::sys::statvfs::fstatvfs(file.as_fd()) {
                 if FileSystemInformationClassLevel::FILE_FS_FULL_SIZE_INFORMATION == req_inner.fs_info_class_lvl {
+                    #[cfg_attr(target_os = "macos", expect(clippy::unnecessary_fallible_conversions))]
                     let info = FileFsFullSizeInformation {
                         total_alloc_units: i64::try_from(statvfs.blocks()).unwrap(),
                         caller_available_alloc_units: i64::try_from(statvfs.blocks_available()).unwrap(),
@@ -272,6 +274,7 @@ pub(crate) fn query_volume_information(
                         sectors_per_alloc_unit: u32::try_from(statvfs.fragment_size()).unwrap(),
                         bytes_per_sector: 1,
                     };
+
                     Ok(vec![SvcMessage::from(
                         RdpdrPdu::ClientDriveQueryVolumeInformationResponse(
                             ClientDriveQueryVolumeInformationResponse {
@@ -323,6 +326,7 @@ pub(crate) fn query_volume_information(
                         RdpdrPdu::ClientDriveQueryVolumeInformationResponse(
                             ClientDriveQueryVolumeInformationResponse {
                                 device_io_reply: DeviceIoResponse::new(req_inner.device_io_request, NtStatus::SUCCESS),
+                                #[cfg_attr(target_os = "macos", expect(clippy::unnecessary_fallible_conversions))]
                                 buffer: Some(FileSystemInformationClass::FileFsSizeInformation(
                                     FileFsSizeInformation {
                                         total_alloc_units: i64::try_from(statvfs.blocks()).unwrap(),
@@ -380,10 +384,10 @@ pub(crate) fn set_information(
                     to.push_str(&info.file_name.replace('\\', "/"));
                     if let Err(error) = std::fs::rename(file, to) {
                         warn!(?error, "Rename file error");
-                        let res = RdpdrPdu::ClientDriveSetInformationResponse(ClientDriveSetInformationResponse::new(
-                            &req_inner,
-                            NtStatus::UNSUCCESSFUL,
-                        )?);
+                        let res = RdpdrPdu::ClientDriveSetInformationResponse(
+                            ClientDriveSetInformationResponse::new(&req_inner, NtStatus::UNSUCCESSFUL)
+                                .map_err(|e| encode_err!(e))?,
+                        );
                         return Ok(vec![SvcMessage::from(res)]);
                     }
                 }
@@ -393,31 +397,32 @@ pub(crate) fn set_information(
                 FileInformationClass::Disposition(_) => {
                     if let Err(error) = std::fs::remove_file(file) {
                         warn!(?error, "Remove file error");
-                        let res = RdpdrPdu::ClientDriveSetInformationResponse(ClientDriveSetInformationResponse::new(
-                            &req_inner,
-                            NtStatus::UNSUCCESSFUL,
-                        )?);
+                        let res = RdpdrPdu::ClientDriveSetInformationResponse(
+                            ClientDriveSetInformationResponse::new(&req_inner, NtStatus::UNSUCCESSFUL)
+                                .map_err(|e| encode_err!(e))?,
+                        );
                         return Ok(vec![SvcMessage::from(res)]);
                     }
                 }
                 FileInformationClass::EndOfFile(info) => {
                     if let Some(file) = backend.file_map.get(&req_inner.device_io_request.file_id) {
-                        // SAFETY: the file must has been opend with write access in the last steps, since rdp prepares to set information. In addition it is a regular file.
+                        // SAFETY: the file must has been opened with write access in the last steps, since rdp prepares to set information. In addition it is a regular file.
                         let set_end_res = unsafe { nix::libc::ftruncate(file.as_raw_fd(), info.end_of_file) };
                         if set_end_res < 0 {
                             let error = nix::errno::Errno::last();
                             warn!(%error, "Failed to set end of file");
                             let res = RdpdrPdu::ClientDriveSetInformationResponse(
-                                ClientDriveSetInformationResponse::new(&req_inner, NtStatus::UNSUCCESSFUL)?,
+                                ClientDriveSetInformationResponse::new(&req_inner, NtStatus::UNSUCCESSFUL)
+                                    .map_err(|e| encode_err!(e))?,
                             );
                             return Ok(vec![SvcMessage::from(res)]);
                         }
                     } else {
                         warn!("no such file");
-                        let res = RdpdrPdu::ClientDriveSetInformationResponse(ClientDriveSetInformationResponse::new(
-                            &req_inner,
-                            NtStatus::NO_SUCH_FILE,
-                        )?);
+                        let res = RdpdrPdu::ClientDriveSetInformationResponse(
+                            ClientDriveSetInformationResponse::new(&req_inner, NtStatus::NO_SUCH_FILE)
+                                .map_err(|e| encode_err!(e))?,
+                        );
                         return Ok(vec![SvcMessage::from(res)]);
                     }
                 }
@@ -428,15 +433,15 @@ pub(crate) fn set_information(
         }
         None => {
             warn!("no such file");
-            let res = RdpdrPdu::ClientDriveSetInformationResponse(ClientDriveSetInformationResponse::new(
-                &req_inner,
-                NtStatus::NO_SUCH_FILE,
-            )?);
+            let res = RdpdrPdu::ClientDriveSetInformationResponse(
+                ClientDriveSetInformationResponse::new(&req_inner, NtStatus::NO_SUCH_FILE)
+                    .map_err(|e| encode_err!(e))?,
+            );
             return Ok(vec![SvcMessage::from(res)]);
         }
     }
     Ok(vec![SvcMessage::from(RdpdrPdu::ClientDriveSetInformationResponse(
-        ClientDriveSetInformationResponse::new(&req_inner, NtStatus::SUCCESS)?,
+        ClientDriveSetInformationResponse::new(&req_inner, NtStatus::SUCCESS).map_err(|e| encode_err!(e))?,
     ))])
 }
 

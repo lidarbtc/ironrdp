@@ -1,5 +1,4 @@
-use ironrdp_pdu::cursor::ReadCursor;
-use ironrdp_pdu::{decode, decode_cursor, encode_vec, PduEncode};
+use ironrdp_core::{decode, decode_cursor, encode_vec, Encode, ReadCursor};
 use ironrdp_testsuite_core::gfx::*;
 use ironrdp_testsuite_core::graphics_messages::*;
 

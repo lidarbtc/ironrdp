@@ -1,10 +1,12 @@
 use bitflags::bitflags;
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 use tap::Pipe as _;
 
 use super::RdpVersion;
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::nego::SecurityProtocol;
-use crate::{PduDecode, PduEncode, PduResult};
 
 const CLIENT_REQUESTED_PROTOCOL_SIZE: usize = 4;
 const EARLY_CAPABILITY_FLAGS_SIZE: usize = 4;
@@ -21,8 +23,8 @@ impl ServerCoreData {
     const FIXED_PART_SIZE: usize = 4 /* rdpVersion */;
 }
 
-impl PduEncode for ServerCoreData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerCoreData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(self.version.0);
@@ -38,8 +40,8 @@ impl PduEncode for ServerCoreData {
     }
 }
 
-impl<'de> PduDecode<'de> for ServerCoreData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ServerCoreData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let version = src.read_u32().pipe(RdpVersion);
@@ -59,8 +61,8 @@ impl ServerCoreOptionalData {
     const NAME: &'static str = "ServerCoreOptionalData";
 }
 
-impl PduEncode for ServerCoreOptionalData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerCoreOptionalData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         if let Some(value) = self.client_requested_protocols {
@@ -101,18 +103,18 @@ macro_rules! try_or_return {
     };
 }
 
-impl<'de> PduDecode<'de> for ServerCoreOptionalData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ServerCoreOptionalData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let mut optional_data = Self::default();
 
         optional_data.client_requested_protocols = Some(
-            SecurityProtocol::from_bits(try_or_return!(src.try_read_u32("clientReqProtocols"), optional_data))
-                .ok_or_else(|| invalid_message_err!("clientReqProtocols", "invalid server security protocol"))?,
+            SecurityProtocol::from_bits(try_or_return!(src.try_read_u32(), optional_data))
+                .ok_or_else(|| invalid_field_err!("clientReqProtocols", "invalid server security protocol"))?,
         );
 
         optional_data.early_capability_flags = Some(
-            ServerEarlyCapabilityFlags::from_bits(try_or_return!(src.try_read_u32("earlyCapFlags"), optional_data))
-                .ok_or_else(|| invalid_message_err!("earlyCapFlags", "invalid early capability flags"))?,
+            ServerEarlyCapabilityFlags::from_bits(try_or_return!(src.try_read_u32(), optional_data))
+                .ok_or_else(|| invalid_field_err!("earlyCapFlags", "invalid early capability flags"))?,
         );
 
         Ok(optional_data)

@@ -1,16 +1,15 @@
-pub(crate) mod bitmap;
+mod bitmap;
 pub(crate) mod rfx;
 
-use std::{cmp, mem};
+use core::{cmp, mem};
 
 use anyhow::{Context, Result};
-use ironrdp_pdu::cursor::WriteCursor;
+use ironrdp_core::{Encode, WriteCursor};
 use ironrdp_pdu::fast_path::{EncryptionFlags, FastPathHeader, FastPathUpdatePdu, Fragmentation, UpdateCode};
 use ironrdp_pdu::geometry::ExclusiveRectangle;
 use ironrdp_pdu::pointer::{ColorPointerAttribute, Point16, PointerAttribute, PointerPositionAttribute};
 use ironrdp_pdu::rdp::capability_sets::{CmdFlags, EntropyBits};
 use ironrdp_pdu::surface_commands::{ExtendedBitmapDataPdu, SurfaceBitsPdu, SurfaceCommand};
-use ironrdp_pdu::PduEncode;
 
 use self::bitmap::BitmapEncoder;
 use self::rfx::RfxEncoder;
@@ -53,12 +52,12 @@ impl UpdateEncoder {
         }
     }
 
-    fn encode_pdu(&mut self, pdu: impl PduEncode) -> Result<usize> {
+    fn encode_pdu(&mut self, pdu: impl Encode) -> Result<usize> {
         loop {
             let mut cursor = WriteCursor::new(self.buffer.as_mut_slice());
             match pdu.encode(&mut cursor) {
                 Err(e) => match e.kind() {
-                    ironrdp_pdu::PduErrorKind::NotEnoughBytes { .. } => {
+                    ironrdp_core::EncodeErrorKind::NotEnoughBytes { .. } => {
                         self.buffer.resize(self.buffer.len() * 2, 0);
                         debug!("encoder buffer resized to: {}", self.buffer.len() * 2);
                     }
@@ -131,11 +130,19 @@ impl UpdateEncoder {
         update(self, bitmap)
     }
 
+    pub(crate) fn fragmenter_from_owned(&self, res: UpdateFragmenterOwned) -> UpdateFragmenter<'_> {
+        UpdateFragmenter {
+            code: res.code,
+            index: res.index,
+            data: &self.buffer[0..res.len],
+        }
+    }
+
     fn bitmap_update(&mut self, bitmap: BitmapUpdate) -> Result<UpdateFragmenter<'_>> {
         let len = loop {
             match self.bitmap.encode(&bitmap, self.buffer.as_mut_slice()) {
                 Err(e) => match e.kind() {
-                    ironrdp_pdu::PduErrorKind::NotEnoughBytes { .. } => {
+                    ironrdp_core::EncodeErrorKind::NotEnoughBytes { .. } => {
                         self.buffer.resize(self.buffer.len() * 2, 0);
                         debug!("encoder buffer resized to: {}", self.buffer.len() * 2);
                     }
@@ -208,6 +215,12 @@ impl UpdateEncoder {
     }
 }
 
+pub(crate) struct UpdateFragmenterOwned {
+    code: UpdateCode,
+    index: usize,
+    len: usize,
+}
+
 pub(crate) struct UpdateFragmenter<'a> {
     code: UpdateCode,
     index: usize,
@@ -217,6 +230,14 @@ pub(crate) struct UpdateFragmenter<'a> {
 impl<'a> UpdateFragmenter<'a> {
     pub(crate) fn new(code: UpdateCode, data: &'a [u8]) -> Self {
         Self { code, index: 0, data }
+    }
+
+    pub(crate) fn into_owned(self) -> UpdateFragmenterOwned {
+        UpdateFragmenterOwned {
+            code: self.code,
+            index: self.index,
+            len: self.data.len(),
+        }
     }
 
     pub(crate) fn size_hint(&self) -> usize {

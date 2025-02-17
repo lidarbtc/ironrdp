@@ -1,11 +1,12 @@
-use byteorder::{LittleEndian, ReadBytesExt as _};
-use num_derive::{FromPrimitive, ToPrimitive};
-use std::fmt::Debug;
-use std::mem::size_of;
-use std::ops::Add;
+use core::fmt::Debug;
+use core::mem::size_of;
+use core::ops::Add;
 
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::PduResult;
+use byteorder::{LittleEndian, ReadBytesExt as _};
+use ironrdp_core::{ensure_size, invalid_field_err, other_err, ReadCursor, WriteCursor};
+use num_derive::{FromPrimitive, ToPrimitive};
+
+use crate::{DecodeResult, EncodeResult};
 
 pub fn split_u64(value: u64) -> (u32, u32) {
     let bytes = value.to_le_bytes();
@@ -54,7 +55,7 @@ pub fn read_string_from_cursor(
     cursor: &mut ReadCursor<'_>,
     character_set: CharacterSet,
     read_null_terminator: bool,
-) -> PduResult<String> {
+) -> DecodeResult<String> {
     let size = if character_set == CharacterSet::Unicode {
         let code_units = if read_null_terminator {
             // Find null or read all if null is not found
@@ -101,27 +102,27 @@ pub fn read_string_from_cursor(
                 .expect("BUG: str_buffer is always even for UTF16");
 
             String::from_utf16(&u16_buffer)
-                .map_err(|_| invalid_message_err!("UTF16 decode", "buffer", "Failed to decode UTF16 string"))?
+                .map_err(|_| invalid_field_err!("UTF16 decode", "buffer", "Failed to decode UTF16 string"))?
         }
         CharacterSet::Ansi => {
             ensure_size!(ctx: "Decode string (UTF-8)", in: cursor, size: size);
             let slice = cursor.read_slice(size);
             String::from_utf8(slice.to_vec())
-                .map_err(|_| invalid_message_err!("UTF8 decode", "buffer", "Failed to decode UTF8 string"))?
+                .map_err(|_| invalid_field_err!("UTF8 decode", "buffer", "Failed to decode UTF8 string"))?
         }
     };
 
     Ok(result.trim_end_matches('\0').into())
 }
 
-pub fn decode_string(src: &[u8], character_set: CharacterSet, read_null_terminator: bool) -> PduResult<String> {
+pub fn decode_string(src: &[u8], character_set: CharacterSet, read_null_terminator: bool) -> DecodeResult<String> {
     read_string_from_cursor(&mut ReadCursor::new(src), character_set, read_null_terminator)
 }
 
 pub fn read_multistring_from_cursor(
     cursor: &mut ReadCursor<'_>,
     character_set: CharacterSet,
-) -> PduResult<Vec<String>> {
+) -> DecodeResult<Vec<String>> {
     let mut strings = Vec::new();
 
     loop {
@@ -143,7 +144,7 @@ pub fn encode_string(
     value: &str,
     character_set: CharacterSet,
     write_null_terminator: bool,
-) -> PduResult<usize> {
+) -> EncodeResult<usize> {
     let (buffer, ctx) = match character_set {
         CharacterSet::Unicode => {
             let mut buffer = to_utf16_bytes(value);
@@ -174,7 +175,7 @@ pub fn write_string_to_cursor(
     value: &str,
     character_set: CharacterSet,
     write_null_terminator: bool,
-) -> PduResult<()> {
+) -> EncodeResult<()> {
     let len = encode_string(cursor.remaining_mut(), value, character_set, write_null_terminator)?;
     cursor.advance(len);
     Ok(())
@@ -184,7 +185,7 @@ pub fn write_multistring_to_cursor(
     cursor: &mut WriteCursor<'_>,
     strings: &[String],
     character_set: CharacterSet,
-) -> PduResult<()> {
+) -> EncodeResult<()> {
     // Write each string to cursor, separated by a null terminator
     for string in strings {
         write_string_to_cursor(cursor, string, character_set, true)?;
@@ -245,7 +246,7 @@ impl<T> SplitTo for &mut [T] {
     fn split_to(&mut self, n: usize) -> Self {
         assert!(n <= self.len());
 
-        let (a, b) = std::mem::take(self).split_at_mut(n);
+        let (a, b) = core::mem::take(self).split_at_mut(n);
         *self = b;
 
         a
@@ -270,7 +271,7 @@ impl CheckedAdd for u32 {
 }
 
 // Utility function for checked addition that returns a PduResult
-pub fn checked_sum<T>(values: &[T]) -> PduResult<T>
+pub fn checked_sum<T>(values: &[T]) -> DecodeResult<T>
 where
     T: CheckedAdd + Copy + Debug,
 {

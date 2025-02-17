@@ -2,12 +2,14 @@
 mod tests;
 
 use bitflags::bitflags;
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive as _, ToPrimitive as _};
 
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::geometry::ExclusiveRectangle;
-use crate::{PduDecode, PduEncode, PduResult};
 
 pub const SURFACE_COMMAND_HEADER_SIZE: usize = 2;
 
@@ -24,8 +26,8 @@ impl SurfaceCommand<'_> {
     const FIXED_PART_SIZE: usize = 2 /* cmdType */;
 }
 
-impl PduEncode for SurfaceCommand<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for SurfaceCommand<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let cmd_type = SurfaceCommandType::from(self);
@@ -52,13 +54,13 @@ impl PduEncode for SurfaceCommand<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for SurfaceCommand<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for SurfaceCommand<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let cmd_type = src.read_u16();
         let cmd_type = SurfaceCommandType::from_u16(cmd_type)
-            .ok_or_else(|| invalid_message_err!("cmdType", "invalid surface command"))?;
+            .ok_or_else(|| invalid_field_err!("cmdType", "invalid surface command"))?;
 
         match cmd_type {
             SurfaceCommandType::SetSurfaceBits => Ok(Self::SetSurfaceBits(SurfaceBitsPdu::decode(src)?)),
@@ -79,8 +81,8 @@ impl SurfaceBitsPdu<'_> {
     const NAME: &'static str = "TS_SURFCMD_x_SURFACE_BITS_PDU";
 }
 
-impl PduEncode for SurfaceBitsPdu<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for SurfaceBitsPdu<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         self.destination.encode(dst)?;
         self.extended_bitmap_data.encode(dst)?;
 
@@ -96,8 +98,8 @@ impl PduEncode for SurfaceBitsPdu<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for SurfaceBitsPdu<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for SurfaceBitsPdu<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let destination = ExclusiveRectangle::decode(src)?;
         let extended_bitmap_data = ExtendedBitmapDataPdu::decode(src)?;
 
@@ -120,8 +122,8 @@ impl FrameMarkerPdu {
     const FIXED_PART_SIZE: usize = 2 /* frameAction */ + 4 /* frameId */;
 }
 
-impl PduEncode for FrameMarkerPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FrameMarkerPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.frame_action as u16);
@@ -139,14 +141,14 @@ impl PduEncode for FrameMarkerPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for FrameMarkerPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FrameMarkerPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_size!(in: src, size: 2);
 
         let frame_action = src.read_u16();
 
         let frame_action = FrameAction::from_u16(frame_action)
-            .ok_or_else(|| invalid_message_err!("frameAction", "invalid frame action"))?;
+            .ok_or_else(|| invalid_field_err!("frameAction", "invalid frame action"))?;
 
         let frame_id = if src.is_empty() {
             // Sometimes Windows 10 RDP server sends not complete FrameMarker PDU (without frame ID),
@@ -173,8 +175,8 @@ pub struct ExtendedBitmapDataPdu<'a> {
     pub data: &'a [u8],
 }
 
-impl std::fmt::Debug for ExtendedBitmapDataPdu<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for ExtendedBitmapDataPdu<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ExtendedBitmapDataPdu")
             .field("bpp", &self.bpp)
             .field("codec_id", &self.codec_id)
@@ -191,12 +193,12 @@ impl ExtendedBitmapDataPdu<'_> {
     const FIXED_PART_SIZE: usize = 1 /* bpp */ + 1 /* flags */ + 1 /* reserved */ + 1 /* codecId */ + 2 /* width */ + 2 /* height */ + 4 /* len */;
 }
 
-impl PduEncode for ExtendedBitmapDataPdu<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ExtendedBitmapDataPdu<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         if self.data.len() > u32::MAX as usize {
-            return Err(invalid_message_err!("bitmapDataLength", "bitmap data is too big"));
+            return Err(invalid_field_err!("bitmapDataLength", "bitmap data is too big"));
         }
 
         dst.write_u8(self.bpp);
@@ -228,8 +230,8 @@ impl PduEncode for ExtendedBitmapDataPdu<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for ExtendedBitmapDataPdu<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ExtendedBitmapDataPdu<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let bpp = src.read_u8();
@@ -283,8 +285,8 @@ impl BitmapDataHeader {
     pub const ENCODED_SIZE: usize = Self::FIXED_PART_SIZE;
 }
 
-impl PduEncode for BitmapDataHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BitmapDataHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.high_unique_id);
@@ -304,8 +306,8 @@ impl PduEncode for BitmapDataHeader {
     }
 }
 
-impl PduDecode<'_> for BitmapDataHeader {
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+impl Decode<'_> for BitmapDataHeader {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let high_unique_id = src.read_u32();

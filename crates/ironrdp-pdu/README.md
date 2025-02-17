@@ -11,12 +11,12 @@ RDP PDU encoding and decoding library.
 
 ## Overview of encoding and decoding traits
 
-It’s important for `PduEncode` to be object-safe in order to enable patterns such as the one
+It’s important for `Encode` to be object-safe in order to enable patterns such as the one
 found in `ironrdp-svc`:
 
 ```rust
 pub trait SvcProcessor {
-    fn process(&mut self, payload: &[u8]) -> PduResult<Vec<Box<dyn PduEncode>>>;
+    fn process(&mut self, payload: &[u8]) -> PduResult<Vec<Box<dyn Encode>>>;
 }
 ```
 
@@ -35,7 +35,7 @@ TODO: elaborate this section
 - Be `no-std` and `no-alloc` friendly, which `std::io::Cursor` is not as of today.
 
 The underlying storage could be abstracted over, but it’s deliberately hardcoded to `&mut [u8]`
-so traits such as `PduEncode` using `WriteCursor` in their associated methods are object-safe.
+so traits such as `Encode` using `WriteCursor` in their associated methods are object-safe.
 
 `WriteBuf` is used in APIs where the required space cannot be known in advance. For instance,
 `ironrdp_connector::Sequence::step` is taking `&mut WriteBuf` instead of `&mut
@@ -47,19 +47,19 @@ Consider this piece of code:
 
 ```rust
 fn process(&mut self, payload: &[u8], output: &mut WriteBuf) -> PduResult<()> {
-    let server_request = ServerRequest: ironrdp_pdu::decode(payload)?;
+    let server_request: ServerRequest = ironrdp_pdu::decode(payload)?;
 
     match server_request.order {
         ServerOrder::DoThis => {
             // do this
-            let response = DoThisResponse { … };
+            let response = DoThisResponse { /* … */ };
 
             // buffer is grown, or not, as appropriate, and `DoThisResponse` is encoded in the "unfilled" region
             ironrdp_pdu::encode_buf(response, output)?;
         }
         ServerOrder::DoThat => {
             // do that
-            let response = DoThatResponse { … };
+            let response = DoThatResponse { /* … */ };
 
             // same as above
             ironrdp_pdu::encode_buf(response, output)?;
@@ -90,7 +90,7 @@ is preferred in order to write `no-std` and `no-alloc` friendly code.
 `WriteCursor`, in essence, is a helper for this kind of code:
 
 ```rust
-pub fn encode_buf<T: PduEncode + ?Sized>(pdu: &T, buf: &mut Vec<u8>, filled_len: usize) -> PduResult<usize> {
+pub fn encode_buf<T: Encode + ?Sized>(pdu: &T, buf: &mut Vec<u8>, filled_len: usize) -> PduResult<usize> {
     let pdu_size = pdu.size();
 
     // Resize the buffer, making sure there is enough space to fit the serialized PDU
@@ -135,7 +135,7 @@ and a cautious approach when clearing and resizing it.
 In comparison, the same code using `WriteBuf` looks like this:
 
 ```rust
-pub fn encode_buf<T: PduEncode + ?Sized>(pdu: &T, buf: &mut WriteBuf) -> PduResult<usize> {
+pub fn encode_buf<T: Encode + ?Sized>(pdu: &T, buf: &mut WriteBuf) -> PduResult<usize> {
     let pdu_size = pdu.size();
 
     let dst = buf.unfilled_to(pdu_size);
@@ -275,7 +275,7 @@ impl MyNetworkCode {
 fn handle_network_code(reader: /* … */) {
     let value = reader.read_u32();
     let code = MyNetworkCode::from_u32(value);
-    
+
     if code == MyNetworkCode::Unknown(2) {
         // The library doesn’t know about this value yet, but we need to handle it because […]
     }
@@ -312,7 +312,7 @@ impl MyNetworkCode {
 fn handle_network_code(reader: /* … */) {
     let value = reader.read_u32();
     let code = MyNetworkCode::from_u32(value);
-    
+
     if code == MyNetworkCode::Unknown(2) { // <- The library does not construct this value as it used to…
         // …  the special case is not handled anymore; no warning and no error
         // is emitted by the compiler, so it’s very easy to overlook this
@@ -468,6 +468,9 @@ are considered to be known and defined. In such cases, `from_bits` also never fa
 precisely the same as `from_bits_retain`, except it’s less ergonomic because it returns a `Result`
 which must be needlessly handled.
 
+This crate is part of the [IronRDP] project.
+
+[IronRDP]: https://github.com/Devolutions/IronRDP
 [bitflags]: https://crates.io/crates/bitflags
 [from_bits]: https://docs.rs/bitflags/2.4.0/bitflags/example_generated/struct.Flags.html#method.from_bits
 [from_bits_truncate]: https://docs.rs/bitflags/2.4.0/bitflags/example_generated/struct.Flags.html#method.from_bits_truncate

@@ -1,6 +1,7 @@
 #[diplomat::bridge]
 pub mod ffi {
-    use crate::{error::ffi::IronRdpError, pdu::ffi::FastPathInputEventIterator};
+    use crate::error::ffi::IronRdpError;
+    use crate::pdu::ffi::FastPathInputEventIterator;
 
     #[diplomat::opaque]
     pub struct InputDatabase(pub ironrdp::input::Database);
@@ -11,7 +12,7 @@ pub mod ffi {
         }
 
         pub fn apply(&mut self, operation: &Operation) -> Box<FastPathInputEventIterator> {
-            let res = self.0.apply(std::iter::once(operation.0.clone()));
+            let res = self.0.apply(core::iter::once(operation.0.clone()));
             Box::new(res.to_vec().into())
         }
     }

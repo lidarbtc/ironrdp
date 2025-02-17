@@ -1,3 +1,6 @@
+#![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://cdnweb.devolutions.net/images/projects/devolutions/logos/devolutions-icon-shadow.svg")]
+
 #[macro_use]
 extern crate tracing;
 
@@ -7,8 +10,8 @@ mod connector;
 mod framed;
 mod session;
 
-use std::future::Future;
-use std::pin::Pin;
+use core::future::Future;
+use core::pin::Pin;
 
 use ironrdp_connector::sspi::generator::NetworkRequest;
 use ironrdp_connector::ConnectorResult;

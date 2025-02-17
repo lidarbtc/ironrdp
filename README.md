@@ -1,10 +1,12 @@
 # IronRDP
 
+[![](https://docs.rs/ironrdp/badge.svg)](https://docs.rs/ironrdp/) [![](https://img.shields.io/crates/v/ironrdp)](https://crates.io/crates/ironrdp)
+
 A collection of Rust crates providing an implementation of the Microsoft Remote Desktop Protocol, with a focus on security.
 
 ## Demonstration
 
-https://user-images.githubusercontent.com/3809077/202049929-76f42471-aeb0-41da-9118-0dc6ea491bd2.mp4
+<https://user-images.githubusercontent.com/3809077/202049929-76f42471-aeb0-41da-9118-0dc6ea491bd2.mp4>
 
 ## Video Codec Support
 
@@ -17,7 +19,7 @@ Supported codecs:
 
 ## Examples
 
-### [`ironrdp-client`](./crates/ironrdp-client)
+### [`ironrdp-client`](https://github.com/Devolutions/IronRDP/tree/master/crates/ironrdp-client)
 
 A full-fledged RDP client based on IronRDP crates suite, and implemented using non-blocking, asynchronous I/O.
 
@@ -25,7 +27,7 @@ A full-fledged RDP client based on IronRDP crates suite, and implemented using n
 cargo run --bin ironrdp-client -- <HOSTNAME> --username <USERNAME> --password <PASSWORD>
 ```
 
-### [`screenshot`](./crates/ironrdp/examples/screenshot.rs)
+### [`screenshot`](https://github.com/Devolutions/IronRDP/blob/master/crates/ironrdp/examples/screenshot.rs)
 
 Example of utilizing IronRDP in a blocking, synchronous fashion.
 
@@ -64,7 +66,7 @@ Alternatively, you may change a few group policies using `gpedit.msc`:
 
 ## Architecture
 
-See the [ARCHITECTURE.md](./ARCHITECTURE.md) document.
+See the [ARCHITECTURE.md](https://github.com/Devolutions/IronRDP/blob/master/ARCHITECTURE.md) document.
 
 ## Getting help
 

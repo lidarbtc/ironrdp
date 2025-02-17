@@ -1,5 +1,4 @@
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameAcknowledge {
@@ -12,8 +11,8 @@ impl FrameAcknowledge {
     const FIXED_PART_SIZE: usize = 4 /* maxUnackFrameCount */;
 }
 
-impl PduEncode for FrameAcknowledge {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FrameAcknowledge {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.max_unacknowledged_frame_count);
@@ -30,8 +29,8 @@ impl PduEncode for FrameAcknowledge {
     }
 }
 
-impl<'de> PduDecode<'de> for FrameAcknowledge {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FrameAcknowledge {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let max_unacknowledged_frame_count = src.read_u32();
@@ -44,8 +43,9 @@ impl<'de> PduDecode<'de> for FrameAcknowledge {
 
 #[cfg(test)]
 mod test {
+    use ironrdp_core::{decode, encode_vec};
+
     use super::*;
-    use crate::{decode, encode_vec};
 
     const FRAME_ACKNOWLEDGE_PDU_BUFFER: [u8; 4] = [0xf4, 0xf3, 0xf2, 0xf1];
     const FRAME_ACKNOWLEDGE_PDU: FrameAcknowledge = FrameAcknowledge {

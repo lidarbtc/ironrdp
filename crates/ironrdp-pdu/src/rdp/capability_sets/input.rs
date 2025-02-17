@@ -2,11 +2,11 @@
 mod tests;
 
 use bitflags::bitflags;
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 use num_traits::{FromPrimitive, ToPrimitive};
 
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::gcc::{KeyboardType, IME_FILE_NAME_SIZE};
-use crate::{utils, PduDecode, PduEncode, PduResult};
+use crate::utils;
 
 const INPUT_LENGTH: usize = 84;
 
@@ -41,8 +41,8 @@ impl Input {
     const FIXED_PART_SIZE: usize = INPUT_LENGTH;
 }
 
-impl PduEncode for Input {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Input {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.input_flags.bits());
@@ -78,8 +78,8 @@ impl PduEncode for Input {
     }
 }
 
-impl<'de> PduDecode<'de> for Input {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Input {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let input_flags = InputFlags::from_bits_truncate(src.read_u16());

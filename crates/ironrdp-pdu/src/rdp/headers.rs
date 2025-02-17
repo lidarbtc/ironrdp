@@ -1,9 +1,12 @@
 use bitflags::bitflags;
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, not_enough_bytes_err, other_err, Decode,
+    DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use crate::codecs::rfx::FrameAcknowledgePdu;
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::input::InputEventPdu;
 use crate::rdp::capability_sets::{ClientConfirmActive, ServerDemandActive};
 use crate::rdp::client_info;
@@ -12,7 +15,6 @@ use crate::rdp::refresh_rectangle::RefreshRectanglePdu;
 use crate::rdp::server_error_info::ServerSetErrorInfoPdu;
 use crate::rdp::session_info::SaveSessionInfoPdu;
 use crate::rdp::suppress_output::SuppressOutputPdu;
-use crate::{PduDecode, PduEncode, PduResult};
 
 pub const BASIC_SECURITY_HEADER_SIZE: usize = 4;
 pub const SHARE_DATA_HEADER_COMPRESSION_MASK: u8 = 0xF;
@@ -40,8 +42,8 @@ impl BasicSecurityHeader {
     pub const FIXED_PART_SIZE: usize = BASIC_SECURITY_HEADER_SIZE;
 }
 
-impl PduEncode for BasicSecurityHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BasicSecurityHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.flags.bits());
@@ -58,12 +60,12 @@ impl PduEncode for BasicSecurityHeader {
     }
 }
 
-impl<'de> PduDecode<'de> for BasicSecurityHeader {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for BasicSecurityHeader {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let flags = BasicSecurityHeaderFlags::from_bits(src.read_u16())
-            .ok_or(invalid_message_err!("securityHeader", "invalid basic security header"))?;
+            .ok_or_else(|| invalid_field_err!("securityHeader", "invalid basic security header"))?;
         let _flags_hi = src.read_u16(); // unused
 
         Ok(Self { flags })
@@ -83,8 +85,8 @@ impl ShareControlHeader {
     const FIXED_PART_SIZE: usize = SHARE_CONTROL_HEADER_SIZE;
 }
 
-impl PduEncode for ShareControlHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ShareControlHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let pdu_type_with_version = PROTOCOL_VERSION | self.share_control_pdu.share_header_type().to_u16().unwrap();
@@ -109,8 +111,8 @@ impl PduEncode for ShareControlHeader {
     }
 }
 
-impl<'de> PduDecode<'de> for ShareControlHeader {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ShareControlHeader {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let total_length = src.read_u16() as usize;
@@ -119,10 +121,10 @@ impl<'de> PduDecode<'de> for ShareControlHeader {
         let share_id = src.read_u32();
 
         let pdu_type = ShareControlPduType::from_u16(pdu_type_with_version & SHARE_CONTROL_HEADER_MASK)
-            .ok_or_else(|| invalid_message_err!("pdu_type", "invalid pdu type"))?;
+            .ok_or_else(|| invalid_field_err!("pdu_type", "invalid pdu type"))?;
         let pdu_version = pdu_type_with_version & !SHARE_CONTROL_HEADER_MASK;
         if pdu_version != PROTOCOL_VERSION {
-            return Err(invalid_message_err!("pdu_version", "invalid PDU version"));
+            return Err(invalid_field_err!("pdu_version", "invalid PDU version"));
         }
 
         let share_pdu = ShareControlPdu::from_type(src, pdu_type)?;
@@ -182,7 +184,7 @@ impl ShareControlPdu {
         }
     }
 
-    pub fn from_type(src: &mut ReadCursor<'_>, share_type: ShareControlPduType) -> PduResult<Self> {
+    pub fn from_type(src: &mut ReadCursor<'_>, share_type: ShareControlPduType) -> DecodeResult<Self> {
         match share_type {
             ShareControlPduType::DemandActivePdu => {
                 Ok(ShareControlPdu::ServerDemandActive(ServerDemandActive::decode(src)?))
@@ -194,13 +196,13 @@ impl ShareControlPdu {
             ShareControlPduType::DeactivateAllPdu => {
                 Ok(ShareControlPdu::ServerDeactivateAll(ServerDeactivateAll::decode(src)?))
             }
-            _ => Err(invalid_message_err!("share_type", "unexpected share control PDU type")),
+            _ => Err(invalid_field_err!("share_type", "unexpected share control PDU type")),
         }
     }
 }
 
-impl PduEncode for ShareControlPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ShareControlPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         match self {
             ShareControlPdu::ServerDemandActive(pdu) => pdu.encode(dst),
             ShareControlPdu::ClientConfirmActive(pdu) => pdu.encode(dst),
@@ -242,8 +244,8 @@ impl ShareDataHeader {
         + COMPRESSED_LENGTH_FIELD_SIZE;
 }
 
-impl PduEncode for ShareDataHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ShareDataHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         if self.compression_flags.is_empty() {
@@ -277,23 +279,23 @@ impl PduEncode for ShareDataHeader {
     }
 }
 
-impl<'de> PduDecode<'de> for ShareDataHeader {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ShareDataHeader {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         read_padding!(src, 1);
         let stream_priority = StreamPriority::from_u8(src.read_u8())
-            .ok_or_else(|| invalid_message_err!("streamPriority", "Invalid stream priority"))?;
+            .ok_or_else(|| invalid_field_err!("streamPriority", "Invalid stream priority"))?;
         let _uncompressed_length = src.read_u16();
         let pdu_type = ShareDataPduType::from_u8(src.read_u8())
-            .ok_or_else(|| invalid_message_err!("pduType", "Invalid pdu type"))?;
+            .ok_or_else(|| invalid_field_err!("pduType", "Invalid pdu type"))?;
         let compression_flags_with_type = src.read_u8();
 
         let compression_flags =
             CompressionFlags::from_bits_truncate(compression_flags_with_type & !SHARE_DATA_HEADER_COMPRESSION_MASK);
         let compression_type =
             client_info::CompressionType::from_u8(compression_flags_with_type & SHARE_DATA_HEADER_COMPRESSION_MASK)
-                .ok_or_else(|| invalid_message_err!("compressionType", "Invalid compression type"))?;
+                .ok_or_else(|| invalid_field_err!("compressionType", "Invalid compression type"))?;
         let _compressed_length = src.read_u16();
 
         let share_data_pdu = ShareDataPdu::from_type(src, pdu_type)?;
@@ -399,7 +401,7 @@ impl ShareDataPdu {
         }
     }
 
-    fn from_type(src: &mut ReadCursor<'_>, share_type: ShareDataPduType) -> PduResult<Self> {
+    fn from_type(src: &mut ReadCursor<'_>, share_type: ShareDataPduType) -> DecodeResult<Self> {
         match share_type {
             ShareDataPduType::Synchronize => Ok(ShareDataPdu::Synchronize(SynchronizePdu::decode(src)?)),
             ShareDataPduType::Control => Ok(ShareDataPdu::Control(ControlPdu::decode(src)?)),
@@ -440,8 +442,8 @@ impl ShareDataPdu {
     }
 }
 
-impl PduEncode for ShareDataPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ShareDataPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         match self {
             ShareDataPdu::Synchronize(pdu) => pdu.encode(dst),
             ShareDataPdu::Control(pdu) => pdu.encode(dst),
@@ -579,8 +581,8 @@ impl ServerDeactivateAll {
     const FIXED_PART_SIZE: usize = 2 /* length_source_descriptor */ + 1 /* source_descriptor */;
 }
 
-impl PduDecode<'_> for ServerDeactivateAll {
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+impl Decode<'_> for ServerDeactivateAll {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let length_source_descriptor = src.read_u16();
         ensure_size!(in: src, size: length_source_descriptor.into());
@@ -589,8 +591,8 @@ impl PduDecode<'_> for ServerDeactivateAll {
     }
 }
 
-impl PduEncode for ServerDeactivateAll {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerDeactivateAll {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
         // A 16-bit, unsigned integer. The size in bytes of the sourceDescriptor field.
         dst.write_u16(1);

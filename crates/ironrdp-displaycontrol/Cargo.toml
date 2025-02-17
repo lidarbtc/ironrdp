@@ -1,6 +1,6 @@
 [package]
 name = "ironrdp-displaycontrol"
-version = "0.1.0"
+version = "0.1.2"
 readme = "README.md"
 description = "Display control dynamic channel extension implementation"
 edition.workspace = true
@@ -11,7 +11,12 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+doctest = false
+test = false
+
 [dependencies]
+ironrdp-core.workspace = true
 ironrdp-dvc.workspace = true
 ironrdp-pdu.workspace = true
 ironrdp-svc.workspace = true
@@ -19,4 +24,3 @@ tracing.workspace = true
 
 [lints]
 workspace = true
-

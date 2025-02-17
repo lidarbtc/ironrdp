@@ -1,8 +1,9 @@
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
 
 const MONITOR_COUNT_MAX: usize = 16;
 const MONITOR_ATTRIBUTE_SIZE: u32 = 20;
@@ -23,8 +24,8 @@ impl ClientMonitorExtendedData {
     const FIXED_PART_SIZE: usize = FLAGS_SIZE + MONITOR_ATTRIBUTE_SIZE_FIELD_SIZE + MONITOR_COUNT;
 }
 
-impl PduEncode for ClientMonitorExtendedData {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientMonitorExtendedData {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(0); // flags
@@ -47,21 +48,21 @@ impl PduEncode for ClientMonitorExtendedData {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientMonitorExtendedData {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientMonitorExtendedData {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let _flags = src.read_u32(); // is unused
 
         let monitor_attribute_size = src.read_u32();
         if monitor_attribute_size != MONITOR_ATTRIBUTE_SIZE {
-            return Err(invalid_message_err!("monitorAttributeSize", "invalid size"));
+            return Err(invalid_field_err!("monitorAttributeSize", "invalid size"));
         }
 
         let monitor_count = cast_length!("monitorCount", src.read_u32())?;
 
         if monitor_count > MONITOR_COUNT_MAX {
-            return Err(invalid_message_err!("monitorCount", "invalid monitor count"));
+            return Err(invalid_field_err!("monitorCount", "invalid monitor count"));
         }
 
         let mut extended_monitors_info = Vec::with_capacity(monitor_count);
@@ -88,8 +89,8 @@ impl ExtendedMonitorInfo {
     const FIXED_PART_SIZE: usize = MONITOR_SIZE;
 }
 
-impl PduEncode for ExtendedMonitorInfo {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ExtendedMonitorInfo {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.physical_width);
@@ -110,14 +111,14 @@ impl PduEncode for ExtendedMonitorInfo {
     }
 }
 
-impl<'de> PduDecode<'de> for ExtendedMonitorInfo {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ExtendedMonitorInfo {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let physical_width = src.read_u32();
         let physical_height = src.read_u32();
         let orientation = MonitorOrientation::from_u32(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("orientation", "invalid monitor orientation"))?;
+            .ok_or_else(|| invalid_field_err!("orientation", "invalid monitor orientation"))?;
         let desktop_scale_factor = src.read_u32();
         let device_scale_factor = src.read_u32();
 

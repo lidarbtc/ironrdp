@@ -1,6 +1,9 @@
-use crate::cursor::{ReadCursor, WriteCursor};
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
+
 use crate::geometry::InclusiveRectangle;
-use crate::{PduDecode, PduEncode, PduResult};
 
 /// [2.2.11.2.1] Refresh Rect PDU Data (TS_REFRESH_RECT_PDU)
 ///
@@ -22,8 +25,8 @@ impl RefreshRectanglePdu {
     const FIXED_PART_SIZE: usize = 1 /* numberOfAreas */ + 3 /* pad3Octets */;
 }
 
-impl PduEncode for RefreshRectanglePdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for RefreshRectanglePdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let n_areas = cast_length!("nAreas", self.areas_to_refresh.len())?;
@@ -47,8 +50,8 @@ impl PduEncode for RefreshRectanglePdu {
     }
 }
 
-impl<'de> PduDecode<'de> for RefreshRectanglePdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for RefreshRectanglePdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let number_of_areas = src.read_u8();

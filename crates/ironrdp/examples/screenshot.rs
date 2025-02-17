@@ -6,12 +6,12 @@
 //!
 //! In this basic client implementation, the client establishes a connection
 //! with the destination server, decodes incoming graphics updates, and saves the
-//! resulting output as a BMP image file on the disk.
+//! resulting output as a PNG image file on the disk.
 //!
 //! # Usage example
 //!
 //! ```shell
-//! cargo run --example=screenshot -- --host <HOSTNAME> -u <USERNAME> -p <PASSWORD> -o out.bmp
+//! cargo run --example=screenshot -- --host <HOSTNAME> -u <USERNAME> -p <PASSWORD> -o out.png
 //! ```
 
 #![allow(unused_crate_dependencies)] // false positives because there is both a library and a binary
@@ -20,21 +20,20 @@
 #[macro_use]
 extern crate tracing;
 
-use std::io::Write as _;
-use std::net::TcpStream;
-use std::path::PathBuf;
-use std::time::Duration;
-
 use anyhow::Context as _;
 use connector::Credentials;
+use core::time::Duration;
 use ironrdp::connector;
-use ironrdp::connector::sspi::network_client::reqwest_network_client::ReqwestNetworkClient;
 use ironrdp::connector::ConnectionResult;
 use ironrdp::pdu::gcc::KeyboardType;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageOutput};
 use ironrdp_pdu::rdp::client_info::PerformanceFlags;
+use sspi::network_client::reqwest_network_client::ReqwestNetworkClient;
+use std::io::Write as _;
+use std::net::TcpStream;
+use std::path::PathBuf;
 use tokio_rustls::rustls;
 
 const HELP: &str = "\
@@ -99,7 +98,7 @@ fn parse_args() -> anyhow::Result<Action> {
         let password = args.value_from_str(["-p", "--password"])?;
         let output = args
             .opt_value_from_str(["-o", "--output"])?
-            .unwrap_or_else(|| PathBuf::from("out.bmp"));
+            .unwrap_or_else(|| PathBuf::from("out.png"));
         let domain = args.opt_value_from_str(["-d", "--domain"])?;
 
         Action::Run {
@@ -156,27 +155,11 @@ fn run(
 
     active_stage(connection_result, framed, &mut image).context("active stage")?;
 
-    let mut bmp = bmp::Image::new(u32::from(image.width()), u32::from(image.height()));
+    let img: image::ImageBuffer<image::Rgba<u8>, _> =
+        image::ImageBuffer::from_raw(u32::from(image.width()), u32::from(image.height()), image.data())
+            .context("invalid image")?;
 
-    image
-        .data()
-        .chunks_exact(usize::from(image.width()).checked_mul(4).expect("never overflow"))
-        .enumerate()
-        .for_each(|(y, row)| {
-            row.chunks_exact(4).enumerate().for_each(|(x, pixel)| {
-                let r = pixel[0];
-                let g = pixel[1];
-                let b = pixel[2];
-                let _a = pixel[3];
-                bmp.set_pixel(
-                    u32::try_from(x).unwrap(),
-                    u32::try_from(y).unwrap(),
-                    bmp::Pixel::new(r, g, b),
-                );
-            })
-        });
-
-    bmp.save(output).context("save BMP image to disk")?;
+    img.save(output).context("save image to disk")?;
 
     Ok(())
 }
@@ -223,10 +206,13 @@ fn build_config(username: String, password: String, domain: Option<String>) -> c
 
         // Disable custom pointers (there is no user interaction anyway)
         no_server_pointer: true,
+        request_data: None,
         autologon: false,
         pointer_software_rendering: true,
         performance_flags: PerformanceFlags::default(),
         desktop_scale_factor: 0,
+        hardware_id: None,
+        license_cache: None,
     }
 }
 
@@ -380,8 +366,7 @@ fn extract_tls_server_public_key(cert: &[u8]) -> anyhow::Result<Vec<u8>> {
 
 mod danger {
     use tokio_rustls::rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use tokio_rustls::rustls::pki_types;
-    use tokio_rustls::rustls::{DigitallySignedStruct, Error, SignatureScheme};
+    use tokio_rustls::rustls::{pki_types, DigitallySignedStruct, Error, SignatureScheme};
 
     #[derive(Debug)]
     pub(super) struct NoCertificateVerification;

@@ -1,9 +1,7 @@
-use ironrdp_pdu::cursor::ReadCursor;
+use ironrdp_core::{impl_as_any, Decode, ReadCursor};
 use ironrdp_pdu::gcc::ChannelName;
-use ironrdp_pdu::{other_err, PduDecode, PduResult};
-use ironrdp_svc::{
-    impl_as_any, CompressionCondition, SvcMessage, SvcProcessor, SvcProcessorMessages, SvcServerProcessor,
-};
+use ironrdp_pdu::{decode_err, pdu_other_err, PduResult};
+use ironrdp_svc::{CompressionCondition, SvcMessage, SvcProcessor, SvcProcessorMessages, SvcServerProcessor};
 use tracing::{debug, error};
 
 use crate::pdu::{self, ClientAudioFormatPdu, QualityMode};
@@ -19,6 +17,10 @@ impl<T> RdpsndError for T where T: std::error::Error + Send + Sync + 'static {}
 pub enum RdpsndServerMessage {
     /// Wave data, with timestamp
     Wave(Vec<u8>, u32),
+    SetVolume {
+        left: u16,
+        right: u16,
+    },
     Close,
     /// Failure received from the OS event loop.
     ///
@@ -26,7 +28,7 @@ pub enum RdpsndServerMessage {
     Error(Box<dyn RdpsndError>),
 }
 
-pub trait RdpsndServerHandler: Send + std::fmt::Debug {
+pub trait RdpsndServerHandler: Send + core::fmt::Debug {
     fn get_formats(&self) -> &[pdu::AudioFormat];
 
     fn start(&mut self, client_format: &ClientAudioFormatPdu) -> Option<u16>;
@@ -72,9 +74,18 @@ impl RdpsndServer {
         let client_format = self
             .client_format
             .as_ref()
-            .ok_or(other_err!("invalid state - no version"))?;
+            .ok_or_else(|| pdu_other_err!("invalid state, client format not yet received"))?;
 
         Ok(client_format.version)
+    }
+
+    pub fn flags(&self) -> PduResult<pdu::AudioFormatFlags> {
+        let client_format = self
+            .client_format
+            .as_ref()
+            .ok_or_else(|| pdu_other_err!("invalid state, client format not yet received"))?;
+
+        Ok(client_format.flags)
     }
 
     pub fn training_pdu(&mut self) -> PduResult<RdpsndSvcMessages> {
@@ -89,7 +100,9 @@ impl RdpsndServer {
 
     pub fn wave(&mut self, data: Vec<u8>, ts: u32) -> PduResult<RdpsndSvcMessages> {
         let version = self.version()?;
-        let format_no = self.format_no.ok_or(other_err!("invalid state - no format"))?;
+        let format_no = self
+            .format_no
+            .ok_or_else(|| pdu_other_err!("invalid state - no format"))?;
 
         // The server doesn't wait for wave confirm, apparently FreeRDP neither.
         let msg = if version >= pdu::Version::V8 {
@@ -116,6 +129,19 @@ impl RdpsndServer {
         Ok(msg)
     }
 
+    pub fn set_volume(&mut self, volume_left: u16, volume_right: u16) -> PduResult<RdpsndSvcMessages> {
+        if !self.flags()?.contains(pdu::AudioFormatFlags::VOLUME) {
+            return Err(pdu_other_err!("client doesn't support volume"));
+        }
+        let pdu = pdu::VolumePdu {
+            volume_left,
+            volume_right,
+        };
+        Ok(RdpsndSvcMessages::new(vec![
+            pdu::ServerAudioOutputPdu::Volume(pdu).into()
+        ]))
+    }
+
     pub fn close(&mut self) -> PduResult<RdpsndSvcMessages> {
         Ok(RdpsndSvcMessages::new(vec![pdu::ServerAudioOutputPdu::Close.into()]))
     }
@@ -133,7 +159,7 @@ impl SvcProcessor for RdpsndServer {
     }
 
     fn process(&mut self, payload: &[u8]) -> PduResult<Vec<SvcMessage>> {
-        let pdu = pdu::ClientAudioOutputPdu::decode(&mut ReadCursor::new(payload))?;
+        let pdu = pdu::ClientAudioOutputPdu::decode(&mut ReadCursor::new(payload)).map_err(|e| decode_err!(e))?;
         debug!(?pdu);
         let msg = match self.state {
             RdpsndState::WaitingForClientFormats => {

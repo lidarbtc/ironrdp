@@ -1,11 +1,10 @@
 use bitflags::bitflags;
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
-
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    PduDecode, PduEncode, PduResult,
-};
 
 const LOGON_EX_LENGTH_FIELD_SIZE: usize = 2;
 const LOGON_EX_FLAGS_FIELD_SIZE: usize = 4;
@@ -39,8 +38,8 @@ impl LogonInfoExtended {
     }
 }
 
-impl PduEncode for LogonInfoExtended {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for LogonInfoExtended {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(cast_length!("internalSize", self.get_internal_size())?);
@@ -67,8 +66,8 @@ impl PduEncode for LogonInfoExtended {
     }
 }
 
-impl<'de> PduDecode<'de> for LogonInfoExtended {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for LogonInfoExtended {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let _self_length = src.read_u16();
@@ -109,8 +108,8 @@ impl ServerAutoReconnect {
     const FIXED_PART_SIZE: usize = AUTO_RECONNECT_PACKET_SIZE + LOGON_INFO_FIELD_DATA_SIZE;
 }
 
-impl PduEncode for ServerAutoReconnect {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerAutoReconnect {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(AUTO_RECONNECT_PACKET_SIZE as u32);
@@ -131,19 +130,19 @@ impl PduEncode for ServerAutoReconnect {
     }
 }
 
-impl<'de> PduDecode<'de> for ServerAutoReconnect {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ServerAutoReconnect {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let _data_length = src.read_u32();
         let packet_length = src.read_u32();
         if packet_length != AUTO_RECONNECT_PACKET_SIZE as u32 {
-            return Err(invalid_message_err!("packetLen", "invalid auto-reconnect packet size"));
+            return Err(invalid_field_err!("packetLen", "invalid auto-reconnect packet size"));
         }
 
         let version = src.read_u32();
         if version != AUTO_RECONNECT_VERSION_1 {
-            return Err(invalid_message_err!("version", "invalid auto-reconnect version"));
+            return Err(invalid_field_err!("version", "invalid auto-reconnect version"));
         }
 
         let logon_id = src.read_u32();
@@ -168,8 +167,8 @@ impl LogonErrorsInfo {
     const FIXED_PART_SIZE: usize = LOGON_ERRORS_INFO_SIZE + LOGON_INFO_FIELD_DATA_SIZE;
 }
 
-impl PduEncode for LogonErrorsInfo {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for LogonErrorsInfo {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(LOGON_ERRORS_INFO_SIZE as u32);
@@ -188,13 +187,13 @@ impl PduEncode for LogonErrorsInfo {
     }
 }
 
-impl<'de> PduDecode<'de> for LogonErrorsInfo {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for LogonErrorsInfo {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let _data_length = src.read_u32();
         let error_type = LogonErrorNotificationType::from_u32(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("errorType", "invalid logon error type"))?;
+            .ok_or_else(|| invalid_field_err!("errorType", "invalid logon error type"))?;
 
         let error_notification_data = src.read_u32();
         let error_data = LogonErrorNotificationDataErrorCode::from_u32(error_notification_data)

@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod tests;
 
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 
 const POINTER_LENGTH: usize = 6;
 
@@ -18,8 +17,8 @@ impl Pointer {
     const FIXED_PART_SIZE: usize = POINTER_LENGTH;
 }
 
-impl PduEncode for Pointer {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Pointer {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(1); // color pointer flag
@@ -38,8 +37,8 @@ impl PduEncode for Pointer {
     }
 }
 
-impl<'de> PduDecode<'de> for Pointer {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Pointer {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let _color_pointer_flag = src.read_u16() != 0;

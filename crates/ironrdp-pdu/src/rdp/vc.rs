@@ -6,10 +6,10 @@ mod tests;
 use std::{io, str};
 
 use bitflags::bitflags;
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 use thiserror::Error;
 
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduError, PduResult};
+use crate::PduError;
 
 const CHANNEL_PDU_HEADER_SIZE: usize = 8;
 
@@ -30,8 +30,8 @@ impl ChannelPduHeader {
     const FIXED_PART_SIZE: usize = CHANNEL_PDU_HEADER_SIZE;
 }
 
-impl PduEncode for ChannelPduHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ChannelPduHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.length);
@@ -48,8 +48,8 @@ impl PduEncode for ChannelPduHeader {
     }
 }
 
-impl<'de> PduDecode<'de> for ChannelPduHeader {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ChannelPduHeader {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let total_length = src.read_u32();
@@ -112,12 +112,5 @@ impl From<PduError> for ChannelError {
 impl From<ChannelError> for io::Error {
     fn from(e: ChannelError) -> io::Error {
         io::Error::new(io::ErrorKind::Other, format!("Virtual channel error: {e}"))
-    }
-}
-
-#[cfg(feature = "std")]
-impl ironrdp_error::legacy::ErrorContext for ChannelError {
-    fn context(&self) -> &'static str {
-        "virtual channel error"
     }
 }

@@ -2,9 +2,9 @@
 mod tests;
 
 use bitflags::bitflags;
-
-use crate::cursor::WriteCursor;
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 
 const FLAGS_FIELD_SIZE: usize = 4;
 const CHUNK_SIZE_FIELD_SIZE: usize = 4;
@@ -41,8 +41,8 @@ impl VirtualChannel {
     const FIXED_PART_SIZE: usize = FLAGS_FIELD_SIZE;
 }
 
-impl PduEncode for VirtualChannel {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for VirtualChannel {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(self.flags.bits());
@@ -72,8 +72,8 @@ macro_rules! try_or_return {
     };
 }
 
-impl<'de> PduDecode<'de> for VirtualChannel {
-    fn decode(src: &mut crate::cursor::ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for VirtualChannel {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let flags = VirtualChannelFlags::from_bits_truncate(src.read_u32());
@@ -83,7 +83,7 @@ impl<'de> PduDecode<'de> for VirtualChannel {
             chunk_size: None,
         };
 
-        virtual_channel_pdu.chunk_size = Some(try_or_return!(src.try_read_u32("chunkSize"), virtual_channel_pdu));
+        virtual_channel_pdu.chunk_size = Some(try_or_return!(src.try_read_u32(), virtual_channel_pdu));
 
         Ok(virtual_channel_pdu)
     }

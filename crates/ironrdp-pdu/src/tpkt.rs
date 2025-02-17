@@ -1,5 +1,6 @@
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduError, PduErrorExt as _, PduResult};
+use ironrdp_core::{ensure_fixed_part_size, unsupported_version_err, ReadCursor, WriteCursor};
+
+use crate::{DecodeResult, EncodeResult};
 
 /// TPKT header
 ///
@@ -47,13 +48,13 @@ impl TpktHeader {
 
     const FIXED_PART_SIZE: usize = Self::SIZE;
 
-    pub fn read(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn read(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let version = src.read_u8();
 
         if version != Self::VERSION {
-            return Err(PduError::unsupported_version("TPKT version", version));
+            return Err(unsupported_version_err!("TPKT version", version));
         }
 
         read_padding!(src, 1);
@@ -63,7 +64,7 @@ impl TpktHeader {
         Ok(Self { packet_length })
     }
 
-    pub fn write(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn write(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u8(Self::VERSION);

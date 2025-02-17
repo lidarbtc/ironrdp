@@ -9,7 +9,7 @@
 //!
 //! This is also good for execution performance.
 //! Cargo will run all tests from a single binary in parallel, but
-//! binaries themselves are run sequentally.
+//! binaries themselves are run sequentially.
 
 mod clipboard;
 mod displaycontrol;
@@ -23,5 +23,3 @@ mod rdcleanpath;
 mod rdpsnd;
 mod server_name;
 mod session;
-
-mod now_proto;

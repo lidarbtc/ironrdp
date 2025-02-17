@@ -4,14 +4,12 @@ mod header_messages;
 use std::io;
 
 use byteorder::{LittleEndian, ReadBytesExt as _, WriteBytesExt as _};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive as _, ToPrimitive as _};
 use thiserror::Error;
 
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    PduBufferParsing, PduDecode, PduEncode, PduResult,
-};
+use crate::PduBufferParsing;
 
 #[rustfmt::skip]
 pub use self::data_messages::{
@@ -181,8 +179,8 @@ impl FrameAcknowledgePdu {
     const FIXED_PART_SIZE: usize = 4 /* frameId */;
 }
 
-impl PduEncode for FrameAcknowledgePdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FrameAcknowledgePdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.frame_id);
@@ -198,8 +196,8 @@ impl PduEncode for FrameAcknowledgePdu {
     }
 }
 
-impl<'de> PduDecode<'de> for FrameAcknowledgePdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FrameAcknowledgePdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let frame_id = src.read_u32();
@@ -286,11 +284,4 @@ pub enum RfxError {
     InvalidChannelWidth(i16),
     #[error("got invalid channel height: {0}")]
     InvalidChannelHeight(i16),
-}
-
-#[cfg(feature = "std")]
-impl ironrdp_error::legacy::ErrorContext for RfxError {
-    fn context(&self) -> &'static str {
-        "RFX"
-    }
 }

@@ -4,6 +4,9 @@ mod tests;
 use std::io;
 
 use bitflags::bitflags;
+use ironrdp_core::{
+    ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 use md5::Digest;
 
 use super::{
@@ -12,9 +15,7 @@ use super::{
     PREAMBLE_SIZE, RANDOM_NUMBER_SIZE, UTF8_NULL_TERMINATOR_SIZE,
 };
 use crate::crypto::rsa::encrypt_with_public_key;
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::utils::{self, CharacterSet};
-use crate::{PduDecode, PduEncode, PduResult};
 
 const LICENSE_REQUEST_STATIC_FIELDS_SIZE: usize = 20;
 
@@ -125,7 +126,7 @@ impl ClientNewLicenseRequest {
 }
 
 impl ClientNewLicenseRequest {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         self.license_header.encode(dst)?;
@@ -171,18 +172,15 @@ impl ClientNewLicenseRequest {
 }
 
 impl ClientNewLicenseRequest {
-    pub fn decode(license_header: LicenseHeader, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(license_header: LicenseHeader, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         if license_header.preamble_message_type != PreambleType::NewLicenseRequest {
-            return Err(invalid_message_err!("preambleMessageType", "unexpected preamble type"));
+            return Err(invalid_field_err!("preambleMessageType", "unexpected preamble type"));
         }
 
         ensure_size!(in: src, size: LICENSE_REQUEST_STATIC_FIELDS_SIZE + RANDOM_NUMBER_SIZE);
         let key_exchange_algorithm = src.read_u32();
         if key_exchange_algorithm != KEY_EXCHANGE_ALGORITHM_RSA {
-            return Err(invalid_message_err!(
-                "keyExchangeAlgo",
-                "invalid key exchange algorithm"
-            ));
+            return Err(invalid_field_err!("keyExchangeAlgo", "invalid key exchange algorithm"));
         }
 
         let _platform_id = src.read_u32();
@@ -190,14 +188,14 @@ impl ClientNewLicenseRequest {
 
         let premaster_secret_blob_header = BlobHeader::decode(src)?;
         if premaster_secret_blob_header.blob_type != BlobType::RANDOM {
-            return Err(invalid_message_err!("blobType", "invalid blob type"));
+            return Err(invalid_field_err!("blobType", "invalid blob type"));
         }
         ensure_size!(in: src, size: premaster_secret_blob_header.length);
         let encrypted_premaster_secret = src.read_slice(premaster_secret_blob_header.length).into();
 
         let username_blob_header = BlobHeader::decode(src)?;
         if username_blob_header.blob_type != BlobType::CLIENT_USER_NAME {
-            return Err(invalid_message_err!("blobType", "invalid blob type"));
+            return Err(invalid_field_err!("blobType", "invalid blob type"));
         }
         ensure_size!(in: src, size: username_blob_header.length);
         let client_username =
@@ -205,7 +203,7 @@ impl ClientNewLicenseRequest {
 
         let machine_name_blob = BlobHeader::decode(src)?;
         if machine_name_blob.blob_type != BlobType::CLIENT_MACHINE_NAME_BLOB {
-            return Err(invalid_message_err!("blobType", "invalid blob type"));
+            return Err(invalid_field_err!("blobType", "invalid blob type"));
         }
         ensure_size!(in: src, size: machine_name_blob.length);
         let client_machine_name =
@@ -233,7 +231,7 @@ fn salted_hash(salt: &[u8], salt_first: &[u8], salt_second: &[u8], input: &[u8])
 }
 
 // According to https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpele/88061224-4a2f-4a28-a52e-e896b75ed2d3
-fn compute_master_secret(premaster_secret: &[u8], client_random: &[u8], server_random: &[u8]) -> Vec<u8> {
+pub(crate) fn compute_master_secret(premaster_secret: &[u8], client_random: &[u8], server_random: &[u8]) -> Vec<u8> {
     [
         salted_hash(premaster_secret, client_random, server_random, b"A"),
         salted_hash(premaster_secret, client_random, server_random, b"BB"),
@@ -243,7 +241,7 @@ fn compute_master_secret(premaster_secret: &[u8], client_random: &[u8], server_r
 }
 
 // According to https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpele/88061224-4a2f-4a28-a52e-e896b75ed2d3
-fn compute_session_key_blob(master_secret: &[u8], client_random: &[u8], server_random: &[u8]) -> Vec<u8> {
+pub(crate) fn compute_session_key_blob(master_secret: &[u8], client_random: &[u8], server_random: &[u8]) -> Vec<u8> {
     [
         salted_hash(master_secret, server_random, client_random, b"A"),
         salted_hash(master_secret, server_random, client_random, b"BB"),

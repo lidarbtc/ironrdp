@@ -1,15 +1,17 @@
 use std::borrow::Cow;
 
-use ironrdp_pdu::cursor::ReadCursor;
+use ironrdp_core::{cast_length, impl_as_any, Decode, EncodeResult, ReadCursor};
 use ironrdp_pdu::gcc::ChannelName;
-use ironrdp_pdu::{cast_length, other_err, PduDecode, PduResult};
-use ironrdp_svc::{impl_as_any, CompressionCondition, SvcClientProcessor, SvcMessage, SvcProcessor};
+use ironrdp_pdu::{decode_err, encode_err, pdu_other_err, PduResult};
+use ironrdp_svc::{CompressionCondition, SvcClientProcessor, SvcMessage, SvcProcessor};
 use tracing::{debug, error};
 
 use crate::pdu::{self, AudioFormat, PitchPdu, ServerAudioFormatPdu, TrainingPdu, VolumePdu};
 use crate::server::RdpsndSvcMessages;
 
-pub trait RdpsndClientHandler: Send + std::fmt::Debug {
+pub trait RdpsndClientHandler: Send + core::fmt::Debug {
+    fn get_formats(&self) -> &[AudioFormat];
+
     fn wave(&mut self, format: &AudioFormat, ts: u32, data: Cow<'_, [u8]>);
 
     fn set_volume(&mut self, volume: VolumePdu);
@@ -23,6 +25,10 @@ pub trait RdpsndClientHandler: Send + std::fmt::Debug {
 pub struct NoopRdpsndBackend;
 
 impl RdpsndClientHandler for NoopRdpsndBackend {
+    fn get_formats(&self) -> &[AudioFormat] {
+        &[]
+    }
+
     fn wave(&mut self, _format: &AudioFormat, _ts: u32, _data: Cow<'_, [u8]>) {}
 
     fn set_volume(&mut self, _volume: VolumePdu) {}
@@ -65,33 +71,28 @@ impl Rdpsnd {
         let server_format = self
             .server_format
             .as_ref()
-            .ok_or(other_err!("invalid state - no format"))?;
+            .ok_or_else(|| pdu_other_err!("invalid state - no format"))?;
 
         server_format
             .formats
             .get(format_no as usize)
-            .ok_or(other_err!("invalid format"))
+            .ok_or_else(|| pdu_other_err!("invalid format"))
     }
 
     pub fn version(&self) -> PduResult<pdu::Version> {
         let server_format = self
             .server_format
             .as_ref()
-            .ok_or(other_err!("invalid state - no version"))?;
+            .ok_or_else(|| pdu_other_err!("invalid state - no version"))?;
 
         Ok(server_format.version)
     }
 
     pub fn client_formats(&mut self) -> PduResult<RdpsndSvcMessages> {
-        let server_format = self
-            .server_format
-            .as_ref()
-            .ok_or(other_err!("invalid state - no format"))?;
-
         let pdu = pdu::ClientAudioFormatPdu {
             version: self.version()?,
             flags: pdu::AudioFormatFlags::empty(),
-            formats: server_format.formats.clone(),
+            formats: self.handler.get_formats().to_vec(),
             volume_left: 0xFFFF,
             volume_right: 0xFFFF,
             pitch: 0x00010000,
@@ -114,9 +115,11 @@ impl Rdpsnd {
     }
 
     pub fn training_confirm(&mut self, pdu: &TrainingPdu) -> PduResult<RdpsndSvcMessages> {
+        let pack_size: EncodeResult<_> = cast_length!("wPackSize", pdu.data.len());
+        let pack_size = pack_size.map_err(|e| encode_err!(e))?;
         let pdu = pdu::TrainingConfirmPdu {
             timestamp: pdu.timestamp,
-            pack_size: cast_length!("wPackSize", pdu.data.len())?,
+            pack_size,
         };
         Ok(RdpsndSvcMessages::new(vec![
             pdu::ClientAudioOutputPdu::TrainingConfirm(pdu).into(),
@@ -144,7 +147,7 @@ impl SvcProcessor for Rdpsnd {
     }
 
     fn process(&mut self, payload: &[u8]) -> PduResult<Vec<SvcMessage>> {
-        let pdu = pdu::ServerAudioOutputPdu::decode(&mut ReadCursor::new(payload))?;
+        let pdu = pdu::ServerAudioOutputPdu::decode(&mut ReadCursor::new(payload)).map_err(|e| decode_err!(e))?;
 
         debug!(?pdu, ?self.state);
         let msg = match self.state {

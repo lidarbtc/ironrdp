@@ -1,3 +1,4 @@
+use ironrdp_core::{decode, encode_vec};
 use lazy_static::lazy_static;
 
 use super::*;
@@ -5,7 +6,6 @@ use crate::rdp::server_license::{
     BasicSecurityHeader, BasicSecurityHeaderFlags, LicensePdu, PreambleFlags, PreambleVersion,
     BASIC_SECURITY_HEADER_SIZE, PREAMBLE_SIZE,
 };
-use crate::{decode, encode_vec};
 
 const SERVER_UPGRADE_LICENSE_BUFFER: [u8; 2059] = [
     0x80, 0x00, // flags
@@ -245,7 +245,7 @@ const NEW_LICENSE_INFORMATION_BUFFER: [u8; 2031] = [
 ];
 
 lazy_static! {
-    pub static ref NEW_LICENSE_INFORMATION: NewLicenseInformation = NewLicenseInformation {
+    pub static ref NEW_LICENSE_INFORMATION: LicenseInformation = LicenseInformation {
         version: 0x0006_0000,
         scope: "microsoft.com".to_owned(),
         company_name: "Microsoft Corporation".to_owned(),

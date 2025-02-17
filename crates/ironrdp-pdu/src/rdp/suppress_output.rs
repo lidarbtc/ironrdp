@@ -1,6 +1,9 @@
-use crate::cursor::{ReadCursor, WriteCursor};
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
+
 use crate::geometry::InclusiveRectangle;
-use crate::{PduDecode, PduEncode, PduResult};
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -43,8 +46,8 @@ impl SuppressOutputPdu {
     const FIXED_PART_SIZE: usize = 1 /* allowDisplayUpdates */ + 3 /* pad */;
 }
 
-impl PduEncode for SuppressOutputPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for SuppressOutputPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let allow_display_updates = if self.desktop_rect.is_some() {
@@ -72,12 +75,12 @@ impl PduEncode for SuppressOutputPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for SuppressOutputPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for SuppressOutputPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let allow_display_updates = AllowDisplayUpdatesType::from_u8(src.read_u8())
-            .ok_or_else(|| invalid_message_err!("allowDisplayUpdates", "invalid display update type"))?;
+            .ok_or_else(|| invalid_field_err!("allowDisplayUpdates", "invalid display update type"))?;
         read_padding!(src, 3);
         let desktop_rect = if allow_display_updates == AllowDisplayUpdatesType::AllowDisplayUpdates {
             Some(InclusiveRectangle::decode(src)?)

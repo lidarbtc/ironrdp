@@ -1,11 +1,12 @@
 use std::io;
 
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 use thiserror::Error;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
 
 pub mod fast_path;
 pub mod mouse;
@@ -33,8 +34,8 @@ impl InputEventPdu {
     const FIXED_PART_SIZE: usize = 4 /* nEvents */;
 }
 
-impl PduEncode for InputEventPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for InputEventPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(self.0.len() as u16);
@@ -52,12 +53,12 @@ impl PduEncode for InputEventPdu {
     }
 
     fn size(&self) -> usize {
-        4 + self.0.iter().map(PduEncode::size).sum::<usize>()
+        4 + self.0.iter().map(Encode::size).sum::<usize>()
     }
 }
 
-impl<'de> PduDecode<'de> for InputEventPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for InputEventPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let number_of_events = src.read_u16();
@@ -88,8 +89,8 @@ impl InputEvent {
     const FIXED_PART_SIZE: usize = 4 /* eventTime */ + 2 /* eventType */;
 }
 
-impl PduEncode for InputEvent {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for InputEvent {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(0); // event time is ignored by a server
@@ -124,14 +125,14 @@ impl PduEncode for InputEvent {
     }
 }
 
-impl<'de> PduDecode<'de> for InputEvent {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for InputEvent {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let _event_time = src.read_u32(); // ignored by a server
         let event_type = src.read_u16();
         let event_type = InputEventType::from_u16(event_type)
-            .ok_or_else(|| invalid_message_err!("eventType", "invalid input event type"))?;
+            .ok_or_else(|| invalid_field_err!("eventType", "invalid input event type"))?;
 
         match event_type {
             InputEventType::Sync => Ok(Self::Sync(SyncPdu::decode(src)?)),

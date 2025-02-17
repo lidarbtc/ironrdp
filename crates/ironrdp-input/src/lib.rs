@@ -1,3 +1,8 @@
+#![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://cdnweb.devolutions.net/images/projects/devolutions/logos/devolutions-icon-shadow.svg")]
+
+use std::collections::BTreeSet;
+
 use bitvec::array::BitArray;
 use bitvec::BitArr;
 use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
@@ -5,7 +10,6 @@ use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::input::mouse_x::PointerXFlags;
 use ironrdp_pdu::input::{MousePdu, MouseXPdu};
 use smallvec::SmallVec;
-use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -375,7 +379,7 @@ impl Database {
             events.push(FastPathInputEvent::KeyboardEvent(flags, scancode));
         }
 
-        for character in std::mem::take(&mut self.unicode_keyboard_state).into_iter() {
+        for character in core::mem::take(&mut self.unicode_keyboard_state).into_iter() {
             let mut utf16_buffer = [0u16; 2];
             let utf16_code_units = character.encode_utf16(&mut utf16_buffer);
 

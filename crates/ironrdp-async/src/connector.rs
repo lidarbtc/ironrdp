@@ -5,7 +5,7 @@ use ironrdp_connector::{
     custom_err, general_err, ClientConnector, ClientConnectorState, ConnectionResult, ConnectorError, ConnectorResult,
     ServerName, State as _,
 };
-use ironrdp_pdu::write_buf::WriteBuf;
+use ironrdp_core::WriteBuf;
 
 use crate::framed::{Framed, FramedRead, FramedWrite};
 use crate::{single_sequence_step, AsyncNetworkClient};
@@ -23,7 +23,7 @@ where
     info!("Begin connection procedure");
 
     while !connector.should_perform_security_upgrade() {
-        single_sequence_step(framed, connector, &mut buf, None).await?;
+        single_sequence_step(framed, connector, &mut buf).await?;
     }
 
     Ok(ShouldUpgrade)
@@ -73,7 +73,7 @@ where
     }
 
     let result = loop {
-        single_sequence_step(framed, &mut connector, &mut buf, None).await?;
+        single_sequence_step(framed, &mut connector, &mut buf).await?;
 
         if let ClientConnectorState::Connected { result } = connector.state {
             break result;
@@ -171,7 +171,7 @@ where
         );
 
         let pdu = framed
-            .read_by_hint(next_pdu_hint, None)
+            .read_by_hint(next_pdu_hint)
             .await
             .map_err(|e| ironrdp_connector::custom_err!("read frame by hint", e))?;
 

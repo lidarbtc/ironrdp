@@ -1,131 +1,43 @@
-use std::cmp::min;
-use std::io::{self, Write};
+use std::io;
+
+use yuvutils_rs::{
+    rdp_abgr_to_yuv444, rdp_argb_to_yuv444, rdp_bgra_to_yuv444, rdp_rgba_to_yuv444, rdp_yuv444_to_argb,
+    rdp_yuv444_to_rgba, BufferStoreMut, YuvPlanarImage, YuvPlanarImageMut,
+};
 
 use crate::image_processing::PixelFormat;
 
-const ALPHA: u8 = 255;
-
-pub fn ycbcr_to_bgra(input: YCbCrBuffer<'_>, mut output: &mut [u8]) -> io::Result<()> {
-    for ycbcr in input {
-        let pixel = Rgb::from(ycbcr);
-
-        output.write_all(&[pixel.b, pixel.g, pixel.r, ALPHA])?;
-    }
-
-    Ok(())
+// FIXME: used for the test suite, we may want to drop it
+pub fn ycbcr_to_argb(input: YCbCrBuffer<'_>, output: &mut [u8]) -> io::Result<()> {
+    let len = u32::try_from(output.len()).map_err(io::Error::other)?;
+    let width = len / 4;
+    let planar = YuvPlanarImage {
+        y_plane: input.y,
+        y_stride: width,
+        u_plane: input.cb,
+        u_stride: width,
+        v_plane: input.cr,
+        v_stride: width,
+        width,
+        height: 1,
+    };
+    rdp_yuv444_to_argb(&planar, output, len).map_err(io::Error::other)
 }
 
-fn iter_to_ycbcr<'a, I, C>(input: I, y: &mut [i16], cb: &mut [i16], cr: &mut [i16], conv: C)
-where
-    I: IntoIterator<Item = &'a [u8]>,
-    C: Fn(&[u8]) -> Rgb,
-{
-    for (i, pixel) in input.into_iter().enumerate() {
-        let pixel = YCbCr::from(conv(pixel));
-
-        y[i] = pixel.y;
-        cb[i] = pixel.cb;
-        cr[i] = pixel.cr;
-    }
-}
-
-fn pixel_format_to_rgb_fn(format: PixelFormat) -> fn(&[u8]) -> Rgb {
-    match format {
-        PixelFormat::ARgb32 | PixelFormat::XRgb32 => |pixel: &[u8]| Rgb {
-            r: pixel[1],
-            g: pixel[2],
-            b: pixel[3],
-        },
-        PixelFormat::ABgr32 | PixelFormat::XBgr32 => |pixel: &[u8]| Rgb {
-            b: pixel[1],
-            g: pixel[2],
-            r: pixel[3],
-        },
-        PixelFormat::BgrA32 | PixelFormat::BgrX32 => |pixel: &[u8]| Rgb {
-            b: pixel[0],
-            g: pixel[1],
-            r: pixel[2],
-        },
-        PixelFormat::RgbA32 | PixelFormat::RgbX32 => |pixel: &[u8]| Rgb {
-            r: pixel[0],
-            g: pixel[1],
-            b: pixel[2],
-        },
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn to_ycbcr(
-    mut input: &[u8],
-    width: usize,
-    height: usize,
-    stride: usize,
-    format: PixelFormat,
-    mut y: &mut [i16],
-    mut cb: &mut [i16],
-    mut cr: &mut [i16],
-) {
-    let to_rgb = pixel_format_to_rgb_fn(format);
-    let bpp = format.bytes_per_pixel() as usize;
-
-    for _ in 0..height {
-        iter_to_ycbcr(input[..width * bpp].chunks_exact(bpp), y, cb, cr, to_rgb);
-        input = &input[stride..];
-        y = &mut y[width..];
-        cb = &mut cb[width..];
-        cr = &mut cr[width..];
-    }
-}
-
-struct TileIterator<'a> {
-    slice: &'a [u8],
-    x: usize,
-    y: usize,
-    width: usize,
-    height: usize,
-    stride: usize,
-    bpp: usize,
-}
-
-impl<'a> TileIterator<'a> {
-    fn new(slice: &'a [u8], width: usize, height: usize, stride: usize, bpp: usize) -> Self {
-        assert!(width >= 1);
-        assert!(height >= 1);
-
-        Self {
-            slice,
-            x: 0,
-            y: 0,
-            width,
-            height,
-            stride,
-            bpp,
-        }
-    }
-}
-
-impl<'a> Iterator for TileIterator<'a> {
-    type Item = &'a [u8];
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // create 64x64 tiles
-        if self.y >= 64 {
-            return None;
-        }
-
-        // repeat the last column & line if necessary
-        let y = min(self.y, self.height - 1);
-        let x = min(self.x, self.width - 1);
-        let pos = y * self.stride + x * self.bpp;
-
-        self.x += 1;
-        if self.x >= 64 {
-            self.x = 0;
-            self.y += 1;
-        }
-
-        Some(&self.slice[pos..pos + self.bpp])
-    }
+pub fn ycbcr_to_rgba(input: YCbCrBuffer<'_>, output: &mut [u8]) -> io::Result<()> {
+    let len = u32::try_from(output.len()).map_err(io::Error::other)?;
+    let width = len / 4;
+    let planar = YuvPlanarImage {
+        y_plane: input.y,
+        y_stride: width,
+        u_plane: input.cb,
+        u_stride: width,
+        v_plane: input.cr,
+        v_stride: width,
+        width,
+        height: 1,
+    };
+    rdp_yuv444_to_rgba(&planar, output, len).map_err(io::Error::other)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -135,21 +47,34 @@ pub fn to_64x64_ycbcr_tile(
     height: usize,
     stride: usize,
     format: PixelFormat,
-    y: &mut [i16],
-    cb: &mut [i16],
-    cr: &mut [i16],
+    y: &mut [i16; 64 * 64],
+    cb: &mut [i16; 64 * 64],
+    cr: &mut [i16; 64 * 64],
 ) {
     assert!(width <= 64);
     assert!(height <= 64);
-    assert_eq!(y.len(), 64 * 64);
-    assert_eq!(cb.len(), 64 * 64);
-    assert_eq!(cr.len(), 64 * 64);
 
-    let to_rgb = pixel_format_to_rgb_fn(format);
-    let bpp = format.bytes_per_pixel() as usize;
+    let y_plane = BufferStoreMut::Borrowed(y);
+    let u_plane = BufferStoreMut::Borrowed(cb);
+    let v_plane = BufferStoreMut::Borrowed(cr);
+    let mut plane = YuvPlanarImageMut {
+        y_plane,
+        y_stride: 64,
+        u_plane,
+        u_stride: 64,
+        v_plane,
+        v_stride: 64,
+        width: width.try_into().unwrap(),
+        height: height.try_into().unwrap(),
+    };
 
-    let input = TileIterator::new(input, width, height, stride, bpp);
-    iter_to_ycbcr(input, y, cb, cr, to_rgb);
+    let res = match format {
+        PixelFormat::RgbA32 | PixelFormat::RgbX32 => rdp_rgba_to_yuv444(&mut plane, input, stride.try_into().unwrap()),
+        PixelFormat::ARgb32 | PixelFormat::XRgb32 => rdp_argb_to_yuv444(&mut plane, input, stride.try_into().unwrap()),
+        PixelFormat::BgrA32 | PixelFormat::BgrX32 => rdp_bgra_to_yuv444(&mut plane, input, stride.try_into().unwrap()),
+        PixelFormat::ABgr32 | PixelFormat::XBgr32 => rdp_abgr_to_yuv444(&mut plane, input, stride.try_into().unwrap()),
+    };
+    res.unwrap();
 }
 
 /// Convert a 16-bit RDP color to RGB representation. Input value should be represented in
@@ -159,10 +84,6 @@ pub fn rdp_16bit_to_rgb(color: u16) -> [u8; 3] {
     let g = (((((color >> 5) & 0x3f) * 259) + 33) >> 6) as u8;
     let b = ((((color & 0x1f) * 527) + 23) >> 6) as u8;
     [r, g, b]
-}
-
-fn clip(v: i32) -> u8 {
-    v.clamp(0, 255) as u8
 }
 
 #[derive(Debug)]
@@ -204,67 +125,4 @@ pub struct Rgb {
     pub r: u8,
     pub g: u8,
     pub b: u8,
-}
-
-impl From<YCbCr> for Rgb {
-    fn from(YCbCr { y, cb, cr }: YCbCr) -> Self {
-        // We scale the factors by << 16 into 32-bit integers in order to
-        // avoid slower floating point multiplications.  Since the final
-        // result needs to be scaled by >> 5 we will extract only the
-        // upper 11 bits (>> 21) from the final sum.
-        // Hence we also have to scale the other terms of the sum by << 16.
-        const DIVISOR: f32 = (1 << 16) as f32;
-
-        let y = i32::from(y);
-        let cb = i32::from(cb);
-        let cr = i32::from(cr);
-
-        let yy = (y + 4096) << 16;
-        let cr_r = cr.overflowing_mul((1.402_525 * DIVISOR) as i32).0;
-        let cb_g = cb.overflowing_mul((0.343_730 * DIVISOR) as i32).0;
-        let cr_g = cr.overflowing_mul((0.714_401 * DIVISOR) as i32).0;
-        let cb_b = cb.overflowing_mul((1.769_905 * DIVISOR) as i32).0;
-        let cr_b = cb.overflowing_mul((0.000_013 * DIVISOR) as i32).0;
-
-        let r = clip((yy.overflowing_add(cr_r).0) >> 21);
-        let g = clip((yy.overflowing_sub(cb_g).0.overflowing_sub(cr_g).0) >> 21);
-        let b = clip((yy.overflowing_add(cb_b).0.overflowing_add(cr_b).0) >> 21);
-
-        Self { r, g, b }
-    }
-}
-
-impl From<Rgb> for YCbCr {
-    fn from(Rgb { r, g, b }: Rgb) -> Self {
-        // We scale the factors by << 15 into 32-bit integers in order
-        // to avoid slower floating point multiplications.  Since the
-        // terms need to be scaled by << 5 we simply scale the final
-        // sum by >> 10
-        const DIVISOR: f32 = (1 << 15) as f32;
-
-        let r = i32::from(r);
-        let g = i32::from(g);
-        let b = i32::from(b);
-
-        let y_r = r.overflowing_mul((0.299 * DIVISOR) as i32).0;
-        let y_g = g.overflowing_mul((0.587 * DIVISOR) as i32).0;
-        let y_b = b.overflowing_mul((0.114 * DIVISOR) as i32).0;
-        let y = y_r.overflowing_add(y_g).0.overflowing_add(y_b).0 >> 10;
-
-        let cb_r = r.overflowing_mul((0.168_935 * DIVISOR) as i32).0;
-        let cb_g = g.overflowing_mul((0.331_665 * DIVISOR) as i32).0;
-        let cb_b = b.overflowing_mul((0.500_59 * DIVISOR) as i32).0;
-        let cb = cb_b.overflowing_sub(cb_g).0.overflowing_sub(cb_r).0 >> 10;
-
-        let cr_r = r.overflowing_mul((0.499_813 * DIVISOR) as i32).0;
-        let cr_g = g.overflowing_mul((0.418_531 * DIVISOR) as i32).0;
-        let cr_b = b.overflowing_mul((0.081_282 * DIVISOR) as i32).0;
-        let cr = cr_r.overflowing_sub(cr_g).0.overflowing_sub(cr_b).0 >> 10;
-
-        Self {
-            y: (y - 4096).clamp(-4096, 4095) as i16,
-            cb: cb.clamp(-4096, 4095) as i16,
-            cr: cr.clamp(-4096, 4095) as i16,
-        }
-    }
 }

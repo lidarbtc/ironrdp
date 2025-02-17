@@ -1,7 +1,9 @@
 use bitflags::bitflags;
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 use ironrdp_pdu::utils::{combine_u64, decode_string, encode_string, split_u64, CharacterSet};
-use ironrdp_pdu::{cast_length, ensure_fixed_part_size, impl_pdu_pod, write_padding, PduDecode, PduEncode, PduResult};
+use ironrdp_pdu::{impl_pdu_pod, write_padding};
 
 const NAME_LENGTH: usize = 520;
 
@@ -70,8 +72,8 @@ impl FileDescriptor {
     const SIZE: usize = Self::FIXED_PART_SIZE;
 }
 
-impl PduEncode for FileDescriptor {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FileDescriptor {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         let mut flags = ClipboardFileFlags::empty();
@@ -98,7 +100,7 @@ impl PduEncode for FileDescriptor {
         let written = encode_string(dst.remaining_mut(), &self.name, CharacterSet::Unicode, true)?;
         dst.advance(written);
 
-        // Pad with zeroes, overidding any previously written data
+        // Pad with zeroes, overriding any previously written data
         write_padding!(dst, NAME_LENGTH - written);
 
         Ok(())
@@ -113,8 +115,8 @@ impl PduEncode for FileDescriptor {
     }
 }
 
-impl<'de> PduDecode<'de> for FileDescriptor {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FileDescriptor {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let flags = ClipboardFileFlags::from_bits_truncate(src.read_u32());
@@ -155,7 +157,7 @@ impl<'de> PduDecode<'de> for FileDescriptor {
 
 /// Represents `CLIPRDR_FILELIST`
 ///
-/// NOTE: `PduDecode` implementation will read all remaining data in cursor as file list.
+/// NOTE: `Decode` implementation will read all remaining data in cursor as file list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackedFileList {
     pub files: Vec<FileDescriptor>,
@@ -168,8 +170,8 @@ impl PackedFileList {
     const FIXED_PART_SIZE: usize = 4; // file count
 }
 
-impl PduEncode for PackedFileList {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for PackedFileList {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(cast_length!(Self::NAME, "cItems", self.files.len())?);
@@ -190,8 +192,8 @@ impl PduEncode for PackedFileList {
     }
 }
 
-impl<'de> PduDecode<'de> for PackedFileList {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for PackedFileList {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let file_count = cast_length!(Self::NAME, "cItems", src.read_u32())?;
 

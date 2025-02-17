@@ -1,5 +1,7 @@
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::{cast_int, ensure_fixed_part_size, invalid_message_err, PduDecode, PduEncode, PduResult};
+use ironrdp_core::{
+    cast_int, ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 use thiserror::Error;
 
 /// Maximum size of PNG image that could be placed on the clipboard.
@@ -7,8 +9,10 @@ const MAX_BUFFER_SIZE: usize = 64 * 1024 * 1024; // 64 MB
 
 #[derive(Debug, Error)]
 pub enum BitmapError {
-    #[error("invalid bitmap header")]
-    InvalidHeader(ironrdp_pdu::PduError),
+    #[error("decoding error")]
+    Decode(ironrdp_core::DecodeError),
+    #[error("encoding error")]
+    Encode(ironrdp_core::EncodeError),
     #[error("unsupported bitmap: {0}")]
     Unsupported(&'static str),
     #[error("one of bitmap's dimensions is invalid")]
@@ -85,8 +89,8 @@ impl CiexyzTriple {
     const FIXED_PART_SIZE: usize = 4 * 3 * 3; // 4(LONG) * 3(xyz) * 3(red, green, blue)
 }
 
-impl<'a> PduDecode<'a> for CiexyzTriple {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for CiexyzTriple {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let red = Ciexyz {
@@ -111,8 +115,8 @@ impl<'a> PduDecode<'a> for CiexyzTriple {
     }
 }
 
-impl PduEncode for CiexyzTriple {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for CiexyzTriple {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.red.x);
@@ -176,7 +180,7 @@ impl BitmapInfoHeader {
 
     const NAME: &'static str = "BITMAPINFOHEADER";
 
-    fn encode_with_size(&self, dst: &mut WriteCursor<'_>, size: u32) -> PduResult<()> {
+    fn encode_with_size(&self, dst: &mut WriteCursor<'_>, size: u32) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(size);
@@ -194,7 +198,7 @@ impl BitmapInfoHeader {
         Ok(())
     }
 
-    fn decode_with_size(src: &mut ReadCursor<'_>) -> PduResult<(Self, u32)> {
+    fn decode_with_size(src: &mut ReadCursor<'_>) -> DecodeResult<(Self, u32)> {
         ensure_fixed_part_size!(in: src);
 
         let size = src.read_u32();
@@ -203,19 +207,19 @@ impl BitmapInfoHeader {
 
         let width = src.read_i32();
         check_invariant(width != i32::MIN && width.abs() <= 10_000)
-            .ok_or_else(|| invalid_message_err!("biWidth", "width is too big"))?;
+            .ok_or_else(|| invalid_field_err!("biWidth", "width is too big"))?;
 
         let height = src.read_i32();
         check_invariant(height != i32::MIN && height.abs() <= 10_000)
-            .ok_or_else(|| invalid_message_err!("biHeight", "height is too big"))?;
+            .ok_or_else(|| invalid_field_err!("biHeight", "height is too big"))?;
 
         let planes = src.read_u16();
         if planes != 1 {
-            return Err(invalid_message_err!("biPlanes", "invalid planes count"));
+            return Err(invalid_field_err!("biPlanes", "invalid planes count"));
         }
 
         let bit_count = src.read_u16();
-        check_invariant(bit_count <= 32).ok_or_else(|| invalid_message_err!("biBitCount", "invalid bit count"))?;
+        check_invariant(bit_count <= 32).ok_or_else(|| invalid_field_err!("biBitCount", "invalid bit count"))?;
 
         let compression = BitmapCompression(src.read_u32());
         let size_image = src.read_u32();
@@ -243,7 +247,7 @@ impl BitmapInfoHeader {
     fn width(&self) -> u16 {
         let abs = self.width.abs();
         debug_assert!(abs <= 10_000);
-        // Per the invariant on self.width, this cast is infaillible.
+        // Per the invariant on self.width, this cast is infallible.
         u16::try_from(abs).unwrap()
     }
 
@@ -251,7 +255,7 @@ impl BitmapInfoHeader {
     fn height(&self) -> u16 {
         let abs = self.height.abs();
         debug_assert!(abs <= 10_000);
-        // Per the invariant on self.height, this cast is infaillible.
+        // Per the invariant on self.height, this cast is infallible.
         u16::try_from(abs).unwrap()
     }
 
@@ -261,8 +265,8 @@ impl BitmapInfoHeader {
     }
 }
 
-impl PduEncode for BitmapInfoHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BitmapInfoHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         let size = cast_int!("biSize", Self::FIXED_PART_SIZE)?;
         self.encode_with_size(dst, size)
     }
@@ -276,13 +280,13 @@ impl PduEncode for BitmapInfoHeader {
     }
 }
 
-impl<'a> PduDecode<'a> for BitmapInfoHeader {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for BitmapInfoHeader {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         let (header, size) = Self::decode_with_size(src)?;
         let size: usize = cast_int!("biSize", size)?;
 
         if size != Self::FIXED_PART_SIZE {
-            return Err(invalid_message_err!("biSize", "invalid V1 bitmap info header size"));
+            return Err(invalid_field_err!("biSize", "invalid V1 bitmap info header size"));
         }
 
         Ok(header)
@@ -327,8 +331,8 @@ impl BitmapV5Header {
     const NAME: &'static str = "BITMAPV5HEADER";
 }
 
-impl PduEncode for BitmapV5Header {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BitmapV5Header {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         let size = cast_int!("biSize", Self::FIXED_PART_SIZE)?;
@@ -360,15 +364,15 @@ impl PduEncode for BitmapV5Header {
     }
 }
 
-impl<'a> PduDecode<'a> for BitmapV5Header {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for BitmapV5Header {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let (header_v1, size) = BitmapInfoHeader::decode_with_size(src)?;
         let size: usize = cast_int!("biSize", size)?;
 
         if size != Self::FIXED_PART_SIZE {
-            return Err(invalid_message_err!("biSize", "invalid V5 bitmap info header size"));
+            return Err(invalid_field_err!("biSize", "invalid V5 bitmap info header size"));
         }
 
         let red_mask = src.read_u32();
@@ -607,7 +611,7 @@ fn encode_png(ctx: &PngEncoderContext) -> Result<Vec<u8>, BitmapError> {
 /// Converts `CF_DIB` to PNG.
 pub fn dib_to_png(input: &[u8]) -> Result<Vec<u8>, BitmapError> {
     let mut src = ReadCursor::new(input);
-    let header = BitmapInfoHeader::decode(&mut src).map_err(BitmapError::InvalidHeader)?;
+    let header = BitmapInfoHeader::decode(&mut src).map_err(BitmapError::Decode)?;
 
     validate_v1_header(&header)?;
 
@@ -627,7 +631,7 @@ pub fn dib_to_png(input: &[u8]) -> Result<Vec<u8>, BitmapError> {
 /// Converts `CF_DIB` to PNG.
 pub fn dibv5_to_png(input: &[u8]) -> Result<Vec<u8>, BitmapError> {
     let mut src = ReadCursor::new(input);
-    let header = BitmapV5Header::decode(&mut src).map_err(BitmapError::InvalidHeader)?;
+    let header = BitmapV5Header::decode(&mut src).map_err(BitmapError::Decode)?;
 
     validate_v5_header(&header)?;
 
@@ -734,7 +738,7 @@ pub fn png_to_cf_dib(input: &[u8]) -> Result<Vec<u8>, BitmapError> {
     let mut output = vec![0; output_len];
     {
         let mut dst = WriteCursor::new(&mut output);
-        header.encode(&mut dst).map_err(BitmapError::InvalidHeader)?;
+        header.encode(&mut dst).map_err(BitmapError::Encode)?;
         dst.write_slice(&bgra_bytes);
     }
 
@@ -777,7 +781,7 @@ pub fn png_to_cf_dibv5(input: &[u8]) -> Result<Vec<u8>, BitmapError> {
     let mut output = vec![0; output_len];
     {
         let mut dst = WriteCursor::new(&mut output);
-        header.encode(&mut dst).map_err(BitmapError::InvalidHeader)?;
+        header.encode(&mut dst).map_err(BitmapError::Encode)?;
         dst.write_slice(&bgra_bytes);
     }
 

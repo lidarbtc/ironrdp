@@ -1,5 +1,4 @@
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct MultifragmentUpdate {
@@ -12,8 +11,8 @@ impl MultifragmentUpdate {
     const FIXED_PART_SIZE: usize = 4;
 }
 
-impl PduEncode for MultifragmentUpdate {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for MultifragmentUpdate {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.max_request_size);
@@ -30,8 +29,8 @@ impl PduEncode for MultifragmentUpdate {
     }
 }
 
-impl<'de> PduDecode<'de> for MultifragmentUpdate {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for MultifragmentUpdate {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let max_request_size = src.read_u32();
@@ -42,8 +41,9 @@ impl<'de> PduDecode<'de> for MultifragmentUpdate {
 
 #[cfg(test)]
 mod test {
+    use ironrdp_core::{decode, encode_vec};
+
     use super::*;
-    use crate::{decode, encode_vec};
 
     const MULTIFRAGMENT_UPDATE_PDU_BUFFER: [u8; 4] = [0xf4, 0xf3, 0xf2, 0xf1];
     const MULTIFRAGMENT_UPDATE_PDU: MultifragmentUpdate = MultifragmentUpdate {

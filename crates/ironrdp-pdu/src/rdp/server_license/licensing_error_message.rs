@@ -1,18 +1,16 @@
 #[cfg(test)]
 mod test;
 
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use super::{BlobHeader, BlobType, LicenseHeader, PreambleFlags, PreambleVersion, BLOB_LENGTH_SIZE, BLOB_TYPE_SIZE};
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    rdp::{
-        headers::{BasicSecurityHeader, BasicSecurityHeaderFlags, BASIC_SECURITY_HEADER_SIZE},
-        server_license::PreambleType,
-    },
-    PduDecode, PduEncode, PduResult,
-};
+use crate::rdp::headers::{BasicSecurityHeader, BasicSecurityHeaderFlags, BASIC_SECURITY_HEADER_SIZE};
+use crate::rdp::server_license::PreambleType;
 
 const ERROR_CODE_SIZE: usize = 4;
 const STATE_TRANSITION_SIZE: usize = 4;
@@ -33,7 +31,7 @@ impl LicensingErrorMessage {
 
     const FIXED_PART_SIZE: usize = ERROR_CODE_SIZE + STATE_TRANSITION_SIZE;
 
-    pub fn new_valid_client() -> PduResult<Self> {
+    pub fn new_valid_client() -> EncodeResult<Self> {
         let mut this = Self {
             license_header: LicenseHeader {
                 security_header: BasicSecurityHeader {
@@ -58,7 +56,7 @@ impl LicensingErrorMessage {
 }
 
 impl LicensingErrorMessage {
-    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         self.license_header.encode(dst)?;
@@ -82,20 +80,20 @@ impl LicensingErrorMessage {
 }
 
 impl LicensingErrorMessage {
-    pub fn decode(license_header: LicenseHeader, src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(license_header: LicenseHeader, src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         if license_header.preamble_message_type != PreambleType::ErrorAlert {
-            return Err(invalid_message_err!("preambleMessageType", "unexpected preamble type"));
+            return Err(invalid_field_err!("preambleMessageType", "unexpected preamble type"));
         }
 
         ensure_fixed_part_size!(in: src);
         let error_code = LicenseErrorCode::from_u32(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("errorCode", "invalid error code"))?;
+            .ok_or_else(|| invalid_field_err!("errorCode", "invalid error code"))?;
         let state_transition = LicensingStateTransition::from_u32(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("stateTransition", "invalid state transition"))?;
+            .ok_or_else(|| invalid_field_err!("stateTransition", "invalid state transition"))?;
 
         let error_info_blob = BlobHeader::decode(src)?;
         if error_info_blob.length != 0 && error_info_blob.blob_type != BlobType::ERROR {
-            return Err(invalid_message_err!("blobType", "invalid blob type"));
+            return Err(invalid_field_err!("blobType", "invalid blob type"));
         }
 
         let error_info = vec![0u8; error_info_blob.length];
@@ -119,7 +117,7 @@ pub enum LicenseErrorCode {
     StatusValidClient = 0x07,
     InvalidClient = 0x08,
     InvalidProductId = 0x0b,
-    InvalidMessageLen = 0x0c,
+    InvalidFieldLen = 0x0c,
 }
 
 #[derive(Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]

@@ -9,6 +9,10 @@ use num_traits::{FromPrimitive as _, ToPrimitive as _};
 #[rustfmt::skip] // do not re-order this
 pub use avc_messages::{Avc420BitmapStream, Avc444BitmapStream, Encoding, QuantQuality};
 pub use client::{CacheImportReplyPdu, CapabilitiesAdvertisePdu, FrameAcknowledgePdu, QueueDepth};
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
 pub use server::{
     CacheToSurfacePdu, CapabilitiesConfirmPdu, Codec1Type, Codec2Type, CreateSurfacePdu, DeleteEncodingContextPdu,
     DeleteSurfacePdu, EndFramePdu, EvictCacheEntryPdu, MapSurfaceToOutputPdu, MapSurfaceToScaledOutputPdu,
@@ -17,8 +21,6 @@ pub use server::{
 };
 
 use super::RDP_GFX_HEADER_SIZE;
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
 
 const CAPABILITY_SET_HEADER_SIZE: usize = 8;
 
@@ -65,8 +67,8 @@ impl CapabilitySet {
     const FIXED_PART_SIZE: usize = CAPABILITY_SET_HEADER_SIZE;
 }
 
-impl PduEncode for CapabilitySet {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for CapabilitySet {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(self.version().to_u32().unwrap());
@@ -113,12 +115,12 @@ impl PduEncode for CapabilitySet {
     }
 }
 
-impl<'de> PduDecode<'de> for CapabilitySet {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for CapabilitySet {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let version = CapabilityVersion::from_u32(src.read_u32())
-            .ok_or_else(|| invalid_message_err!("version", "unhandled version"))?;
+            .ok_or_else(|| invalid_field_err!("version", "unhandled version"))?;
         let data_length: usize = cast_length!("dataLength", src.read_u32())?;
 
         ensure_size!(in: src, size: data_length);
@@ -196,8 +198,8 @@ impl Color {
     const FIXED_PART_SIZE: usize = 4 /* BGRA */;
 }
 
-impl PduEncode for Color {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Color {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u8(self.b);
@@ -217,8 +219,8 @@ impl PduEncode for Color {
     }
 }
 
-impl<'de> PduDecode<'de> for Color {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Color {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let b = src.read_u8();
@@ -242,8 +244,8 @@ impl Point {
     const FIXED_PART_SIZE: usize = 2 /* X */ + 2 /* Y */;
 }
 
-impl PduEncode for Point {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Point {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.x);
@@ -261,8 +263,8 @@ impl PduEncode for Point {
     }
 }
 
-impl<'de> PduDecode<'de> for Point {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Point {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let x = src.read_u16();

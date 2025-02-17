@@ -12,6 +12,9 @@ keywords.workspace = true
 categories.workspace = true
 default-run = "ironrdp-client"
 
+# Not publishing for now.
+publish = false
+
 [lib]
 doctest = false
 test = false
@@ -29,6 +32,7 @@ native-tls = ["ironrdp-tls/native-tls"]
 
 # Protocols
 ironrdp = { workspace = true, features = [
+    "session",
     "input",
     "graphics",
     "dvc",
@@ -37,6 +41,7 @@ ironrdp = { workspace = true, features = [
     "rdpsnd",
     "cliprdr",
     "displaycontrol",
+    "connector"
 ] }
 ironrdp-cliprdr-native.workspace = true
 ironrdp-rdpsnd-native.workspace = true
@@ -72,6 +77,8 @@ semver = "1"
 reqwest = "0.12"
 url = "2.5"
 raw-window-handle = "0.6.2"
+ironrdp-core = { workspace = true, features = ["alloc"] }
+uuid = { version = "1.12.1"}
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_Foundation"] }

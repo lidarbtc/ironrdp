@@ -1,9 +1,11 @@
-use std::fmt::{self, Display};
-use std::mem::size_of;
+use core::fmt::{self, Display};
+use core::mem::size_of;
 
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::{ensure_size, invalid_message_err, unsupported_pdu_err, PduDecode, PduEncode, PduError, PduResult};
-use ironrdp_svc::SvcPduEncode;
+use ironrdp_core::{
+    ensure_size, invalid_field_err, unsupported_value_err, Decode, DecodeError, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
+use ironrdp_svc::SvcEncode;
 
 use self::efs::{
     ClientDeviceListAnnounce, ClientDriveQueryDirectoryResponse, ClientDriveQueryInformationResponse,
@@ -96,8 +98,8 @@ impl RdpdrPdu {
     }
 }
 
-impl PduDecode<'_> for RdpdrPdu {
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+impl Decode<'_> for RdpdrPdu {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         let header = SharedHeader::decode(src)?;
         match header.packet_id {
             PacketId::CoreServerAnnounce => Ok(RdpdrPdu::VersionAndIdPdu(VersionAndIdPdu::decode(header, src)?)),
@@ -107,7 +109,7 @@ impl PduDecode<'_> for RdpdrPdu {
                 ServerDeviceAnnounceResponse::decode(src)?,
             )),
             PacketId::CoreDeviceIoRequest => Ok(RdpdrPdu::DeviceIoRequest(DeviceIoRequest::decode(src)?)),
-            _ => Err(unsupported_pdu_err!(
+            _ => Err(unsupported_value_err!(
                 "RdpdrPdu",
                 "PacketId",
                 header.packet_id.to_string()
@@ -116,8 +118,8 @@ impl PduDecode<'_> for RdpdrPdu {
     }
 }
 
-impl PduEncode for RdpdrPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for RdpdrPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         self.header().encode(dst)?;
 
         match self {
@@ -188,7 +190,7 @@ impl PduEncode for RdpdrPdu {
     }
 }
 
-impl SvcPduEncode for RdpdrPdu {}
+impl SvcEncode for RdpdrPdu {}
 
 impl fmt::Debug for RdpdrPdu {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -311,14 +313,14 @@ pub struct SharedHeader {
 impl SharedHeader {
     const SIZE: usize = size_of::<u16>() * 2;
 
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: Self::SIZE);
         dst.write_u16(self.component.into());
         dst.write_u16(self.packet_id.into());
         Ok(())
     }
 
-    pub fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+    pub fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_size!(in: src, size: Self::SIZE);
         Ok(Self {
             component: src.read_u16().try_into()?,
@@ -337,13 +339,13 @@ pub enum Component {
 }
 
 impl TryFrom<u16> for Component {
-    type Error = PduError;
+    type Error = DecodeError;
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             0x4472 => Ok(Component::RdpdrCtypCore),
             0x5052 => Ok(Component::RdpdrCtypPrn),
-            _ => Err(invalid_message_err!("try_from", "Component", "invalid value")),
+            _ => Err(invalid_field_err!("try_from", "Component", "invalid value")),
         }
     }
 }
@@ -386,7 +388,7 @@ pub enum PacketId {
 }
 
 impl TryFrom<u16> for PacketId {
-    type Error = PduError;
+    type Error = DecodeError;
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
@@ -403,7 +405,7 @@ impl TryFrom<u16> for PacketId {
             0x5043 => Ok(PacketId::PrnCacheData),
             0x554C => Ok(PacketId::CoreUserLoggedon),
             0x5543 => Ok(PacketId::PrnUsingXps),
-            _ => Err(invalid_message_err!("try_from", "PacketId", "invalid value")),
+            _ => Err(invalid_field_err!("try_from", "PacketId", "invalid value")),
         }
     }
 }

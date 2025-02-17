@@ -41,7 +41,7 @@ and Developer Productivity][developer-productivity] by Ciera Jaspan and Collin G
 researchers, also elaborates on why it is important to keep build times low.
 
 **Architectural Invariant**: unless the performance, usability or ergonomic gain is really worth
-it, the amount of [monomorphization] incured in downstream user code should be minimal to avoid
+it, the amount of [monomorphization] incurred in downstream user code should be minimal to avoid
 binary bloating and to keep the compilation as parallel as possible. Large generic functions should
 be avoided if possible.
 
@@ -55,11 +55,22 @@ Meta crate re-exporting important crates.
 
 **Architectural Invariant**: this crate re-exports other crates and does not provide anything else.
 
+#### [`crates/ironrdp-core`](./crates/ironrdp-core)
+
+Common traits and types.
+
+This crate is motivated by the fact that only a few items are required to build most of the other crates such as the virtual channels.
+To move up these crates up in the compilation tree, `ironrdp-core` must remain small, with very few dependencies.
+It contains the most "low-context" building blocks.
+
+Most notable traits are `Decode` and `Encode` which are used to define a common interface for PDU encoding and decoding.
+These are object-safe, and must remain so.
+
+Most notable types are `ReadCursor`, `WriteCursor` and `WriteBuf` which are used pervasively for encoding and decoding in a `no-std` manner.
+
 #### [`crates/ironrdp-pdu`](./crates/ironrdp-pdu)
 
 PDU encoding and decoding.
-
-_TODO_: talk about important types and traits such as PduDecode, PduEncode…
 
 _TODO_: clean up the dependencies
 
@@ -197,8 +208,6 @@ This is to keep iteration time short.
 #### [`crates/ironrdp-testsuite-extra`](./crates/ironrdp-testsuite-extra)
 
 Contains all integration tests for code living in the extra tier, in a single binary, organized in modules.
-
-(WIP: this crate does not exist yet.)
 
 #### [`crates/ironrdp-fuzzing`](./crates/ironrdp-fuzzing)
 

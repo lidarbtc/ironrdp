@@ -1,6 +1,9 @@
-use crate::cursor::{ReadCursor, WriteCursor};
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, unexpected_message_type_err, ReadCursor, WriteCursor,
+};
+
 use crate::tpkt::TpktHeader;
-use crate::{PduError, PduErrorExt as _, PduResult};
+use crate::{DecodeResult, EncodeResult};
 
 /// TPDU type used during X.224 messages exchange
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -23,11 +26,11 @@ impl TpduCode {
         }
     }
 
-    pub fn check_expected(self, expected: TpduCode) -> PduResult<()> {
+    pub fn check_expected(self, expected: TpduCode) -> DecodeResult<()> {
         if self == expected {
             Ok(())
         } else {
-            Err(PduError::unexpected_message_type(TpduHeader::NAME, self.0))
+            Err(unexpected_message_type_err!(TpduHeader::NAME, self.0))
         }
     }
 }
@@ -114,14 +117,14 @@ impl TpduHeader {
 
     const FIXED_PART_SIZE: usize = Self::DATA_FIXED_PART_SIZE;
 
-    pub fn read(src: &mut ReadCursor<'_>, tpkt: &TpktHeader) -> PduResult<Self> {
+    pub fn read(src: &mut ReadCursor<'_>, tpkt: &TpktHeader) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let li = src.read_u8(); // LI
         let code = TpduCode::from(src.read_u8()); // Code
 
         if usize::from(li) + 1 + TpktHeader::SIZE > usize::from(tpkt.packet_length) {
-            return Err(PduError::invalid_message(
+            return Err(invalid_field_err(
                 Self::NAME,
                 "li",
                 "tpdu length greater than tpkt length",
@@ -130,7 +133,7 @@ impl TpduHeader {
 
         // The value 255 (1111 1111) is reserved for possible extensions.
         if li == 0b1111_1111 {
-            return Err(PduError::invalid_message(
+            return Err(invalid_field_err(
                 Self::NAME,
                 "li",
                 "unsupported X.224 extension (suggested by LI field set to 255)",
@@ -147,7 +150,7 @@ impl TpduHeader {
         Ok(Self { li, code })
     }
 
-    pub fn write(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+    pub fn write(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         const EOT_BYTE: u8 = 0x80;
 
         ensure_fixed_part_size!(in: dst);

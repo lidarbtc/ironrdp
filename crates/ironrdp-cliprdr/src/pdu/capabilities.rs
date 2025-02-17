@@ -1,9 +1,9 @@
 use bitflags::bitflags;
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::{
-    cast_int, cast_length, ensure_fixed_part_size, ensure_size, impl_pdu_pod, invalid_message_err, read_padding,
-    write_padding, PduDecode, PduEncode, PduResult,
+use ironrdp_core::{
+    cast_int, cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeError, DecodeResult,
+    Encode, EncodeResult, ReadCursor, WriteCursor,
 };
+use ironrdp_pdu::{impl_pdu_pod, read_padding, write_padding};
 
 use crate::pdu::PartialHeader;
 
@@ -58,8 +58,8 @@ impl Capabilities {
     }
 }
 
-impl PduEncode for Capabilities {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Capabilities {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         let header = PartialHeader::new(cast_int!("dataLen", self.inner_size())?);
         header.encode(dst)?;
 
@@ -84,8 +84,8 @@ impl PduEncode for Capabilities {
     }
 }
 
-impl<'de> PduDecode<'de> for Capabilities {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Capabilities {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let _header = PartialHeader::decode(src)?;
 
         ensure_fixed_part_size!(in: src);
@@ -130,8 +130,8 @@ impl From<GeneralCapabilitySet> for CapabilitySet {
     }
 }
 
-impl PduEncode for CapabilitySet {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for CapabilitySet {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         let (caps, length) = match self {
             Self::General(value) => {
                 let length = value.size() + Self::FIXED_PART_SIZE;
@@ -158,8 +158,8 @@ impl PduEncode for CapabilitySet {
     }
 }
 
-impl<'de> PduDecode<'de> for CapabilitySet {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for CapabilitySet {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let caps_type = src.read_u16();
@@ -170,7 +170,7 @@ impl<'de> PduDecode<'de> for CapabilitySet {
                 let general = GeneralCapabilitySet::decode(src)?;
                 Ok(Self::General(general))
             }
-            _ => Err(invalid_message_err!(
+            _ => Err(invalid_field_err!(
                 "capabilitySetType",
                 "invalid clipboard capability set type"
             )),
@@ -190,8 +190,8 @@ impl GeneralCapabilitySet {
     const FIXED_PART_SIZE: usize = 4 /* version */ + 4 /* flags */;
 }
 
-impl PduEncode for GeneralCapabilitySet {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for GeneralCapabilitySet {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.version.into());
@@ -209,8 +209,8 @@ impl PduEncode for GeneralCapabilitySet {
     }
 }
 
-impl<'de> PduDecode<'de> for GeneralCapabilitySet {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for GeneralCapabilitySet {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let version: ClipboardProtocolVersion = src.read_u32().try_into()?;
@@ -252,16 +252,13 @@ impl From<ClipboardProtocolVersion> for u32 {
 }
 
 impl TryFrom<u32> for ClipboardProtocolVersion {
-    type Error = ironrdp_pdu::PduError;
+    type Error = DecodeError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             Self::VERSION_VALUE_V1 => Ok(Self::V1),
             Self::VERSION_VALUE_V2 => Ok(Self::V2),
-            _ => Err(invalid_message_err!(
-                "version",
-                "Invalid clipboard capabilities version"
-            )),
+            _ => Err(invalid_field_err!("version", "Invalid clipboard capabilities version")),
         }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "ironrdp-graphics"
-version = "0.1.0"
+version = "0.1.2"
 readme = "README.md"
 description = "RDP image processing primitives"
 edition.workspace = true
@@ -20,12 +20,13 @@ bit_field = "0.10"
 bitflags.workspace = true
 bitvec = "1.0"
 byteorder.workspace = true # TODO: remove
-ironrdp-error.workspace = true
+ironrdp-core.workspace = true
 ironrdp-pdu = { workspace = true, features = ["std"] }
 lazy_static.workspace = true # TODO: remove in favor of https://doc.rust-lang.org/std/sync/struct.OnceLock.html
 num-derive.workspace = true # TODO: remove
 num-traits.workspace = true # TODO: remove
 thiserror.workspace = true
+yuvutils-rs = { version = "0.8", features = ["rdp"] }
 
 [dev-dependencies]
 bmp = "0.5"

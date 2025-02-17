@@ -1,10 +1,8 @@
+use ironrdp_core::{
+    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
-
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    PduDecode, PduEncode, PduResult,
-};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerSetErrorInfoPdu(pub ErrorInfo);
@@ -15,8 +13,8 @@ impl ServerSetErrorInfoPdu {
     const FIXED_PART_SIZE: usize = 4 /* errorInfo */;
 }
 
-impl PduEncode for ServerSetErrorInfoPdu {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ServerSetErrorInfoPdu {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.0.to_u32().unwrap());
@@ -33,13 +31,13 @@ impl PduEncode for ServerSetErrorInfoPdu {
     }
 }
 
-impl<'de> PduDecode<'de> for ServerSetErrorInfoPdu {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ServerSetErrorInfoPdu {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let error_info = src.read_u32();
         let error_info =
-            ErrorInfo::from_u32(error_info).ok_or_else(|| invalid_message_err!("errorInfo", "unexpected info code"))?;
+            ErrorInfo::from_u32(error_info).ok_or_else(|| invalid_field_err!("errorInfo", "unexpected info code"))?;
 
         Ok(Self(error_info))
     }
@@ -400,7 +398,7 @@ impl RdpSpecificCode {
 
 #[cfg(test)]
 mod tests {
-    use crate::{decode, encode_vec};
+    use ironrdp_core::{decode, encode_vec};
 
     use super::*;
 

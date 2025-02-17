@@ -1,11 +1,13 @@
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 use bit_field::BitField;
 use bitflags::bitflags;
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
+};
 
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::geometry::InclusiveRectangle;
-use crate::{PduDecode, PduEncode, PduResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuantQuality {
@@ -20,8 +22,8 @@ impl QuantQuality {
     const FIXED_PART_SIZE: usize = 1 /* data */ + 1 /* quality */;
 }
 
-impl PduEncode for QuantQuality {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for QuantQuality {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         let mut data = 0u8;
@@ -41,8 +43,8 @@ impl PduEncode for QuantQuality {
     }
 }
 
-impl<'de> PduDecode<'de> for QuantQuality {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for QuantQuality {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let data = src.read_u8();
@@ -65,7 +67,7 @@ pub struct Avc420BitmapStream<'a> {
 }
 
 impl Debug for Avc420BitmapStream<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Avc420BitmapStream")
             .field("rectangles", &self.rectangles)
             .field("quant_qual_vals", &self.quant_qual_vals)
@@ -80,8 +82,8 @@ impl Avc420BitmapStream<'_> {
     const FIXED_PART_SIZE: usize = 4 /* nRect */;
 }
 
-impl PduEncode for Avc420BitmapStream<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Avc420BitmapStream<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(cast_length!("len", self.rectangles.len())?);
@@ -106,8 +108,8 @@ impl PduEncode for Avc420BitmapStream<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for Avc420BitmapStream<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Avc420BitmapStream<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let num_regions = src.read_u32();
@@ -150,8 +152,8 @@ impl Avc444BitmapStream<'_> {
     const FIXED_PART_SIZE: usize = 4 /* streamInfo */;
 }
 
-impl PduEncode for Avc444BitmapStream<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for Avc444BitmapStream<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         let mut stream_info = 0u32;
@@ -180,8 +182,8 @@ impl PduEncode for Avc444BitmapStream<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for Avc444BitmapStream<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for Avc444BitmapStream<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let stream_info = src.read_u32();
@@ -190,7 +192,7 @@ impl<'de> PduDecode<'de> for Avc444BitmapStream<'de> {
 
         if stream_len == 0 {
             if encoding == Encoding::LUMA_AND_CHROMA {
-                return Err(invalid_message_err!("encoding", "invalid encoding"));
+                return Err(invalid_field_err!("encoding", "invalid encoding"));
             }
 
             let stream1 = Avc420BitmapStream::decode(src)?;

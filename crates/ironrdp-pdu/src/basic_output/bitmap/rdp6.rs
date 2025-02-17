@@ -1,4 +1,7 @@
-use crate::{PduDecode, PduEncode, PduResult, ReadCursor, WriteCursor};
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 
 const NON_RLE_PADDING_SIZE: usize = 1;
 
@@ -23,8 +26,8 @@ impl BitmapStreamHeader {
     const FIXED_PART_SIZE: usize = 1;
 }
 
-impl PduDecode<'_> for BitmapStreamHeader {
-    fn decode(src: &mut ReadCursor<'_>) -> PduResult<Self> {
+impl Decode<'_> for BitmapStreamHeader {
+    fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
         let header = src.read_u8();
 
@@ -49,8 +52,8 @@ impl PduDecode<'_> for BitmapStreamHeader {
     }
 }
 
-impl PduEncode for BitmapStreamHeader {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BitmapStreamHeader {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let mut header = ((self.enable_rle_compression as u8) << 4) | ((!self.use_alpha as u8) << 5);
@@ -113,15 +116,15 @@ impl<'a> BitmapStream<'a> {
     }
 }
 
-impl<'a> PduDecode<'a> for BitmapStream<'a> {
-    fn decode(src: &mut ReadCursor<'a>) -> PduResult<Self> {
+impl<'a> Decode<'a> for BitmapStream<'a> {
+    fn decode(src: &mut ReadCursor<'a>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
-        let header = crate::decode_cursor::<BitmapStreamHeader>(src)?;
+        let header = ironrdp_core::decode_cursor::<BitmapStreamHeader>(src)?;
 
         let color_planes_size = if !header.enable_rle_compression {
             // Cut padding field if RLE flags is set to 0
             if src.is_empty() {
-                return Err(invalid_message_err!(
+                return Err(invalid_field_err!(
                     "padding",
                     "missing padding byte from zero-sized non-RLE bitmap data",
                 ));
@@ -137,11 +140,11 @@ impl<'a> PduDecode<'a> for BitmapStream<'a> {
     }
 }
 
-impl PduEncode for BitmapStream<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for BitmapStream<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
-        crate::encode_cursor(&self.header, dst)?;
+        ironrdp_core::encode_cursor(&self.header, dst)?;
         dst.write_slice(self.color_panes_data());
 
         // Write padding
@@ -169,15 +172,15 @@ mod tests {
     use super::*;
 
     fn assert_roundtrip(buffer: &[u8], expected: Expect) {
-        let pdu = crate::decode::<BitmapStream<'_>>(buffer).unwrap();
+        let pdu = ironrdp_core::decode::<BitmapStream<'_>>(buffer).unwrap();
         expected.assert_debug_eq(&pdu);
         assert_eq!(pdu.size(), buffer.len());
-        let reencoded = crate::encode_vec(&pdu).unwrap();
+        let reencoded = ironrdp_core::encode_vec(&pdu).unwrap();
         assert_eq!(reencoded.as_slice(), buffer);
     }
 
     fn assert_parsing_failure(buffer: &[u8], expected: Expect) {
-        let error = crate::decode::<BitmapStream<'_>>(buffer).err().unwrap();
+        let error = ironrdp_core::decode::<BitmapStream<'_>>(buffer).err().unwrap();
         expected.assert_debug_eq(&error);
     }
 
@@ -283,7 +286,7 @@ mod tests {
             &[],
             expect![[r#"
                 Error {
-                    context: "<ironrdp_pdu::basic_output::bitmap::rdp6::BitmapStream as ironrdp_pdu::PduDecode>::decode",
+                    context: "<ironrdp_pdu::basic_output::bitmap::rdp6::BitmapStream as ironrdp_core::decode::Decode>::decode",
                     kind: NotEnoughBytes {
                         received: 0,
                         expected: 1,
@@ -298,8 +301,8 @@ mod tests {
             &[0x20],
             expect![[r#"
                 Error {
-                    context: "<ironrdp_pdu::basic_output::bitmap::rdp6::BitmapStream as ironrdp_pdu::PduDecode>::decode",
-                    kind: InvalidMessage {
+                    context: "<ironrdp_pdu::basic_output::bitmap::rdp6::BitmapStream as ironrdp_core::decode::Decode>::decode",
+                    kind: InvalidField {
                         field: "padding",
                         reason: "missing padding byte from zero-sized non-RLE bitmap data",
                     },

@@ -1,7 +1,5 @@
 use bitflags::bitflags;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LargePointer {
@@ -14,8 +12,8 @@ impl LargePointer {
     const FIXED_PART_SIZE: usize = 2;
 }
 
-impl PduEncode for LargePointer {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for LargePointer {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u16(self.flags.bits());
@@ -32,8 +30,8 @@ impl PduEncode for LargePointer {
     }
 }
 
-impl<'de> PduDecode<'de> for LargePointer {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for LargePointer {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let flags = LargePointerSupportFlags::from_bits_truncate(src.read_u16());
@@ -52,8 +50,9 @@ bitflags! {
 
 #[cfg(test)]
 mod test {
+    use ironrdp_core::{decode, encode_vec};
+
     use super::*;
-    use crate::{decode, encode_vec};
 
     const LARGE_POINTER_PDU_BUFFER: [u8; 2] = [0x01, 0x00];
     const LARGE_POINTER_PDU: LargePointer = LargePointer {

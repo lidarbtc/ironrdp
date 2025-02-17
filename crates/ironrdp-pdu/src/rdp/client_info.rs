@@ -2,13 +2,16 @@ use core::fmt;
 use std::io;
 
 use bitflags::bitflags;
+use ironrdp_core::{
+    ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor,
+    WriteCursor,
+};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive as _, ToPrimitive as _};
 use thiserror::Error;
 
-use crate::cursor::{ReadCursor, WriteCursor};
 use crate::utils::CharacterSet;
-use crate::{utils, PduDecode, PduEncode, PduError, PduResult};
+use crate::{utils, PduError};
 
 const RECONNECT_COOKIE_LEN: usize = 28;
 const TIMEZONE_INFO_NAME_LEN: usize = 64;
@@ -56,8 +59,8 @@ impl ClientInfo {
         + WORK_DIR_LENGTH_SIZE;
 }
 
-impl PduEncode for ClientInfo {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ClientInfo {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         let character_set = if self.flags.contains(ClientInfoFlags::UNICODE) {
@@ -118,18 +121,18 @@ impl PduEncode for ClientInfo {
     }
 }
 
-impl<'de> PduDecode<'de> for ClientInfo {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ClientInfo {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let code_page = src.read_u32();
         let flags_with_compression_type = src.read_u32();
 
         let flags = ClientInfoFlags::from_bits(flags_with_compression_type & !COMPRESSION_TYPE_MASK)
-            .ok_or(invalid_message_err!("flags", "invalid ClientInfoFlags"))?;
+            .ok_or_else(|| invalid_field_err!("flags", "invalid ClientInfoFlags"))?;
         let compression_type =
             CompressionType::from_u8(((flags_with_compression_type & COMPRESSION_TYPE_MASK) >> 9) as u8)
-                .ok_or(invalid_message_err!("flags", "invalid CompressionType"))?;
+                .ok_or_else(|| invalid_field_err!("flags", "invalid CompressionType"))?;
 
         let character_set = if flags.contains(ClientInfoFlags::UNICODE) {
             CharacterSet::Unicode
@@ -202,11 +205,11 @@ pub struct ExtendedClientInfo {
 impl ExtendedClientInfo {
     // const NAME: &'static str = "ExtendedClientInfo";
 
-    fn decode(src: &mut ReadCursor<'_>, character_set: CharacterSet) -> PduResult<Self> {
+    fn decode(src: &mut ReadCursor<'_>, character_set: CharacterSet) -> DecodeResult<Self> {
         ensure_size!(in: src, size: CLIENT_ADDRESS_FAMILY_SIZE + CLIENT_ADDRESS_LENGTH_SIZE);
 
         let address_family = AddressFamily::from_u16(src.read_u16())
-            .ok_or(invalid_message_err!("clientAddressFamily", "invalid address family"))?;
+            .ok_or_else(|| invalid_field_err!("clientAddressFamily", "invalid address family"))?;
 
         // This size includes the length of the mandatory null terminator.
         let address_size = src.read_u16() as usize;
@@ -229,7 +232,7 @@ impl ExtendedClientInfo {
         })
     }
 
-    fn encode(&self, dst: &mut WriteCursor<'_>, character_set: CharacterSet) -> PduResult<()> {
+    fn encode(&self, dst: &mut WriteCursor<'_>, character_set: CharacterSet) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size(character_set));
 
         dst.write_u16(self.address_family.to_u16().unwrap());
@@ -293,8 +296,8 @@ impl ExtendedClientOptionalInfo {
     }
 }
 
-impl PduEncode for ExtendedClientOptionalInfo {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ExtendedClientOptionalInfo {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         if let Some(ref timezone) = self.timezone {
@@ -338,8 +341,8 @@ impl PduEncode for ExtendedClientOptionalInfo {
     }
 }
 
-impl<'de> PduDecode<'de> for ExtendedClientOptionalInfo {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ExtendedClientOptionalInfo {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let mut optional_data = Self::default();
 
         if src.len() < TimezoneInfo::FIXED_PART_SIZE {
@@ -357,7 +360,7 @@ impl<'de> PduDecode<'de> for ExtendedClientOptionalInfo {
         }
         optional_data.performance_flags = Some(
             PerformanceFlags::from_bits(src.read_u32())
-                .ok_or(invalid_message_err!("performanceFlags", "invalid performance flags"))?,
+                .ok_or_else(|| invalid_field_err!("performanceFlags", "invalid performance flags"))?,
         );
 
         if src.len() < 2 {
@@ -365,11 +368,11 @@ impl<'de> PduDecode<'de> for ExtendedClientOptionalInfo {
         }
         let reconnect_cookie_size = src.read_u16();
         if reconnect_cookie_size != RECONNECT_COOKIE_LEN as u16 && reconnect_cookie_size != 0 {
-            return Err(invalid_message_err!("cbAutoReconnectCookie", "invalid cookie size"));
+            return Err(invalid_field_err!("cbAutoReconnectCookie", "invalid cookie size"));
         }
         if reconnect_cookie_size != 0 {
             if src.len() < RECONNECT_COOKIE_LEN {
-                return Err(invalid_message_err!("cbAutoReconnectCookie", "missing cookie data"));
+                return Err(invalid_field_err!("cbAutoReconnectCookie", "missing cookie data"));
             }
             optional_data.reconnect_cookie = Some(src.read_array());
         }
@@ -388,10 +391,10 @@ impl<'de> PduDecode<'de> for ExtendedClientOptionalInfo {
 pub struct TimezoneInfo {
     pub bias: u32,
     pub standard_name: String,
-    pub standard_date: Option<SystemTime>,
+    pub standard_date: OptionalSystemTime,
     pub standard_bias: u32,
     pub daylight_name: String,
-    pub daylight_date: Option<SystemTime>,
+    pub daylight_date: OptionalSystemTime,
     pub daylight_bias: u32,
 }
 
@@ -407,8 +410,8 @@ impl TimezoneInfo {
         + BIAS_SIZE;
 }
 
-impl PduEncode for TimezoneInfo {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for TimezoneInfo {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.bias);
@@ -439,17 +442,17 @@ impl PduEncode for TimezoneInfo {
     }
 }
 
-impl<'de> PduDecode<'de> for TimezoneInfo {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for TimezoneInfo {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let bias = src.read_u32();
         let standard_name = utils::decode_string(src.read_slice(TIMEZONE_INFO_NAME_LEN), CharacterSet::Unicode, false)?;
-        let standard_date = <Option<SystemTime>>::decode(src)?;
+        let standard_date = OptionalSystemTime::decode(src)?;
         let standard_bias = src.read_u32();
 
         let daylight_name = utils::decode_string(src.read_slice(TIMEZONE_INFO_NAME_LEN), CharacterSet::Unicode, false)?;
-        let daylight_date = <Option<SystemTime>>::decode(src)?;
+        let daylight_date = OptionalSystemTime::decode(src)?;
         let daylight_bias = src.read_u32();
 
         Ok(Self {
@@ -481,12 +484,15 @@ impl SystemTime {
     const FIXED_PART_SIZE: usize = 2 /* Year */ + 2 /* Month */ + 2 /* DoW */ + 2 /* Day */ + 2 /* Hour */ + 2 /* Minute */ + 2 /* Second */ + 2 /* Ms */;
 }
 
-impl PduEncode for Option<SystemTime> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionalSystemTime(pub Option<SystemTime>);
+
+impl Encode for OptionalSystemTime {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(0); // year
-        if let Some(st) = self {
+        if let Some(st) = &self.0 {
             dst.write_u16(st.month.to_u16().unwrap());
             dst.write_u16(st.day_of_week.to_u16().unwrap());
             dst.write_u16(st.day.to_u16().unwrap());
@@ -510,8 +516,8 @@ impl PduEncode for Option<SystemTime> {
     }
 }
 
-impl<'de> PduDecode<'de> for Option<SystemTime> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for OptionalSystemTime {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_size!(in: src, size: SystemTime::FIXED_PART_SIZE);
 
         let _year = src.read_u16(); // This field MUST be set to zero.
@@ -528,7 +534,7 @@ impl<'de> PduDecode<'de> for Option<SystemTime> {
             DayOfWeek::from_u16(day_of_week),
             DayOfWeekOccurrence::from_u16(day),
         ) {
-            (Some(month), Some(day_of_week), Some(day)) => Ok(Some(SystemTime {
+            (Some(month), Some(day_of_week), Some(day)) => Ok(Self(Some(SystemTime {
                 month,
                 day_of_week,
                 day,
@@ -536,8 +542,8 @@ impl<'de> PduDecode<'de> for Option<SystemTime> {
                 minute,
                 second,
                 milliseconds,
-            })),
-            _ => Ok(None),
+            }))),
+            _ => Ok(Self(None)),
         }
     }
 }
@@ -699,8 +705,9 @@ fn string_len(value: &str, character_set: CharacterSet) -> u16 {
 }
 
 pub mod builder {
+    use core::marker::PhantomData;
+
     use super::*;
-    use std::marker::PhantomData;
 
     pub struct ExtendedClientOptionalInfoBuilderStateSetTimeZone;
     pub struct ExtendedClientOptionalInfoBuilderStateSetSessionId;

@@ -1,7 +1,9 @@
 #![allow(clippy::return_self_not_must_use)]
-use std::fmt::Display;
+use core::fmt::Display;
 
-use ironrdp::{cliprdr::backend::ClipboardError, connector::ConnectorError, session::SessionError};
+use ironrdp::cliprdr::backend::ClipboardError;
+use ironrdp::connector::ConnectorError;
+use ironrdp::session::SessionError;
 #[cfg(target_os = "windows")]
 use ironrdp_cliprdr_native::WinCliprdrError;
 
@@ -10,7 +12,8 @@ use self::ffi::IronRdpErrorKind;
 impl From<ConnectorError> for IronRdpErrorKind {
     fn from(val: ConnectorError) -> Self {
         match val.kind {
-            ironrdp::connector::ConnectorErrorKind::Pdu(_) => IronRdpErrorKind::PduError,
+            ironrdp::connector::ConnectorErrorKind::Encode(_) => IronRdpErrorKind::EncodeError,
+            ironrdp::connector::ConnectorErrorKind::Decode(_) => IronRdpErrorKind::DecodeError,
             ironrdp::connector::ConnectorErrorKind::Credssp(_) => IronRdpErrorKind::CredsspError,
             ironrdp::connector::ConnectorErrorKind::AccessDenied => IronRdpErrorKind::AccessDenied,
             _ => IronRdpErrorKind::Generic,
@@ -36,14 +39,26 @@ impl From<ironrdp::pdu::PduError> for IronRdpErrorKind {
     }
 }
 
+impl From<ironrdp::core::EncodeError> for IronRdpErrorKind {
+    fn from(_val: ironrdp::core::EncodeError) -> Self {
+        IronRdpErrorKind::EncodeError
+    }
+}
+
+impl From<ironrdp::core::DecodeError> for IronRdpErrorKind {
+    fn from(_val: ironrdp::core::DecodeError) -> Self {
+        IronRdpErrorKind::DecodeError
+    }
+}
+
 impl From<std::io::Error> for IronRdpErrorKind {
     fn from(_: std::io::Error) -> Self {
         IronRdpErrorKind::IO
     }
 }
 
-impl From<std::fmt::Error> for IronRdpErrorKind {
-    fn from(_val: std::fmt::Error) -> Self {
+impl From<core::fmt::Error> for IronRdpErrorKind {
+    fn from(_val: core::fmt::Error) -> Self {
         IronRdpErrorKind::Generic
     }
 }
@@ -52,6 +67,8 @@ impl From<SessionError> for IronRdpErrorKind {
     fn from(value: SessionError) -> Self {
         match value.kind() {
             ironrdp::session::SessionErrorKind::Pdu(_) => IronRdpErrorKind::PduError,
+            ironrdp::session::SessionErrorKind::Encode(_) => IronRdpErrorKind::EncodeError,
+            ironrdp::session::SessionErrorKind::Decode(_) => IronRdpErrorKind::DecodeError,
             _ => IronRdpErrorKind::Generic,
         }
     }
@@ -94,8 +111,9 @@ struct IronRdpErrorInner {
 
 #[diplomat::bridge]
 pub mod ffi {
+    use core::fmt::Write as _;
+
     use diplomat_runtime::DiplomatWriteable;
-    use std::fmt::Write as _;
 
     #[derive(Debug, Clone, Copy, thiserror::Error)]
     pub enum IronRdpErrorKind {
@@ -103,6 +121,10 @@ pub mod ffi {
         Generic,
         #[error("PDU error")]
         PduError,
+        #[error("Encode error")]
+        EncodeError,
+        #[error("Decode error")]
+        DecodeError,
         #[error("CredSSP error")]
         CredsspError,
         #[error("Value is consumed")]
@@ -158,7 +180,7 @@ impl ValueConsumedError {
 }
 
 impl Display for ValueConsumedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if let Some(reason) = &self.reason {
             write!(f, "{}: {}", self.item, reason)
         } else {
@@ -198,7 +220,7 @@ impl IncorrectEnumTypeErrorBuilder {
 }
 
 impl Display for IncorrectEnumTypeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "expected enum variable {}, of enum {}",
@@ -233,7 +255,7 @@ impl WrongOSError {
 }
 
 impl Display for WrongOSError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if let Some(custom_message) = &self.custom_message {
             write!(f, "{}", custom_message)?;
         }

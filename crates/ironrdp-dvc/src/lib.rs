@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://cdnweb.devolutions.net/images/projects/devolutions/logos/devolutions-icon-shadow.svg")]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[macro_use]
@@ -5,19 +7,21 @@ extern crate tracing;
 
 extern crate alloc;
 
-use crate::alloc::borrow::ToOwned;
-use alloc::string::String;
-use core::any::TypeId;
-use pdu::DrdynvcDataPdu;
-
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
+use core::any::TypeId;
+
+use pdu::DrdynvcDataPdu;
+
+use crate::alloc::borrow::ToOwned;
 // Re-export ironrdp_pdu crate for convenience
 #[rustfmt::skip] // do not re-order this pub use
 pub use ironrdp_pdu;
-use ironrdp_pdu::{assert_obj_safe, cast_length, encode_vec, other_err, PduEncode, PduResult};
-use ironrdp_svc::{self, AsAny, SvcMessage};
+use ironrdp_core::{assert_obj_safe, cast_length, encode_vec, other_err, AsAny, Encode, EncodeResult};
+use ironrdp_pdu::{decode_err, pdu_other_err, PduResult};
+use ironrdp_svc::{self, SvcMessage};
 
 mod complete_data;
 use complete_data::CompleteData;
@@ -31,10 +35,10 @@ pub use server::*;
 pub mod pdu;
 
 /// Represents a message that, when encoded, forms a complete PDU for a given dynamic virtual channel.
-/// This means a message that is ready to be wrapped in [`dvc::CommonPdu::DataFirst`] and [`dvc::CommonPdu::Data`] PDUs
+/// This means a message that is ready to be wrapped in [`pdu::DataFirstPdu`] and [`pdu::DataPdu`] PDUs
 /// (being split into multiple of such PDUs if necessary).
-pub trait DvcPduEncode: PduEncode + Send {}
-pub type DvcMessage = Box<dyn DvcPduEncode>;
+pub trait DvcEncode: Encode + Send {}
+pub type DvcMessage = Box<dyn DvcEncode>;
 
 /// A type that is a Dynamic Virtual Channel (DVC)
 ///
@@ -61,7 +65,7 @@ pub fn encode_dvc_messages(
     channel_id: u32,
     messages: Vec<DvcMessage>,
     flags: ironrdp_svc::ChannelFlags,
-) -> PduResult<Vec<SvcMessage>> {
+) -> EncodeResult<Vec<SvcMessage>> {
     let mut res = Vec::new();
     for msg in messages {
         let total_length = msg.size();
@@ -72,8 +76,8 @@ pub fn encode_dvc_messages(
 
         while off < total_length {
             let first = off == 0;
-            let rem = total_length.checked_sub(off).unwrap();
-            let size = core::cmp::min(rem, DrdynvcDataPdu::MAX_DATA_SIZE);
+            let remaining_length = total_length.checked_sub(off).unwrap();
+            let size = core::cmp::min(remaining_length, DrdynvcDataPdu::MAX_DATA_SIZE);
             let end = off
                 .checked_add(size)
                 .ok_or_else(|| other_err!("encode_dvc_messages", "overflow occurred"))?;
@@ -132,13 +136,13 @@ impl DynamicVirtualChannel {
         if let Some(channel_id) = self.channel_id {
             self.channel_processor.start(channel_id)
         } else {
-            Err(other_err!("DynamicVirtualChannel::start", "channel ID not set"))
+            Err(pdu_other_err!("DynamicVirtualChannel::start", "channel ID not set"))
         }
     }
 
     fn process(&mut self, pdu: DrdynvcDataPdu) -> PduResult<Vec<DvcMessage>> {
         let channel_id = pdu.channel_id();
-        let complete_data = self.complete_data.process_data(pdu)?;
+        let complete_data = self.complete_data.process_data(pdu).map_err(|e| decode_err!(e))?;
         if let Some(complete_data) = complete_data {
             self.channel_processor.process(channel_id, &complete_data)
         } else {

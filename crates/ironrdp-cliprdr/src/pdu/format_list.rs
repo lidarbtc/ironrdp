@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::utils::{read_string_from_cursor, to_utf16_bytes, write_string_to_cursor, CharacterSet};
-use ironrdp_pdu::{
-    cast_int, ensure_size, impl_pdu_borrowing, impl_pdu_pod, invalid_message_err, IntoOwnedPdu, PduDecode, PduEncode,
-    PduResult,
+use ironrdp_core::{
+    cast_int, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, IntoOwned, ReadCursor,
+    WriteCursor,
 };
+use ironrdp_pdu::utils::{read_string_from_cursor, to_utf16_bytes, write_string_to_cursor, CharacterSet};
+use ironrdp_pdu::{decode_err, impl_pdu_borrowing, impl_pdu_pod, PduResult};
 
 use crate::pdu::{ClipboardPduFlags, PartialHeader};
 
@@ -219,10 +219,10 @@ pub struct FormatList<'a> {
 
 impl_pdu_borrowing!(FormatList<'_>, OwnedFormatList);
 
-impl IntoOwnedPdu for FormatList<'_> {
+impl IntoOwned for FormatList<'_> {
     type Owned = OwnedFormatList;
 
-    fn into_owned_pdu(self) -> Self::Owned {
+    fn into_owned(self) -> Self::Owned {
         OwnedFormatList {
             use_ascii: self.use_ascii,
             encoded_formats: Cow::Owned(self.encoded_formats.into_owned()),
@@ -236,7 +236,7 @@ impl FormatList<'_> {
     // `CLIPRDR_SHORT_FORMAT_NAME` size
     const SHORT_FORMAT_SIZE: usize = 4 /* formatId */ + 32 /* name */;
 
-    fn new_impl(formats: &[ClipboardFormat], use_long_format: bool, use_ascii: bool) -> PduResult<Self> {
+    fn new_impl(formats: &[ClipboardFormat], use_long_format: bool, use_ascii: bool) -> EncodeResult<Self> {
         let charset = if use_ascii {
             CharacterSet::Ansi
         } else {
@@ -313,11 +313,11 @@ impl FormatList<'_> {
         }
     }
 
-    pub fn new_unicode(formats: &[ClipboardFormat], use_long_format: bool) -> PduResult<Self> {
+    pub fn new_unicode(formats: &[ClipboardFormat], use_long_format: bool) -> EncodeResult<Self> {
         Self::new_impl(formats, use_long_format, false)
     }
 
-    pub fn new_ascii(formats: &[ClipboardFormat], use_long_format: bool) -> PduResult<Self> {
+    pub fn new_ascii(formats: &[ClipboardFormat], use_long_format: bool) -> EncodeResult<Self> {
         Self::new_impl(formats, use_long_format, true)
     }
 
@@ -337,7 +337,7 @@ impl FormatList<'_> {
 
             while src.len() >= MINIMAL_FORMAT_SIZE {
                 let id = src.read_u32();
-                let name = read_string_from_cursor(&mut src, charset, true)?;
+                let name = read_string_from_cursor(&mut src, charset, true).map_err(|e| decode_err!(e))?;
 
                 let format = ClipboardFormat::new(ClipboardFormatId::new(id)).with_name(ClipboardFormatName::new(name));
 
@@ -355,7 +355,7 @@ impl FormatList<'_> {
                 let name_buffer = src.read_slice(32);
 
                 let mut name_cursor: ReadCursor<'_> = ReadCursor::new(name_buffer);
-                let name = read_string_from_cursor(&mut name_cursor, charset, true)?;
+                let name = read_string_from_cursor(&mut name_cursor, charset, true).map_err(|e| decode_err!(e))?;
 
                 let format = ClipboardFormat::new(ClipboardFormatId(id)).with_name(ClipboardFormatName::new(name));
 
@@ -367,8 +367,8 @@ impl FormatList<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for FormatList<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FormatList<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let header = PartialHeader::decode(src)?;
 
         let use_ascii = header.message_flags.contains(ClipboardPduFlags::ASCII_NAMES);
@@ -383,8 +383,8 @@ impl<'de> PduDecode<'de> for FormatList<'de> {
     }
 }
 
-impl PduEncode for FormatList<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FormatList<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         let header_flags = if self.use_ascii {
             ClipboardPduFlags::ASCII_NAMES
         } else {
@@ -423,8 +423,8 @@ impl FormatListResponse {
     const NAME: &'static str = "FORMAT_LIST_RESPONSE";
 }
 
-impl PduEncode for FormatListResponse {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FormatListResponse {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         let header_flags = match self {
             FormatListResponse::Ok => ClipboardPduFlags::RESPONSE_OK,
             FormatListResponse::Fail => ClipboardPduFlags::RESPONSE_FAIL,
@@ -443,13 +443,13 @@ impl PduEncode for FormatListResponse {
     }
 }
 
-impl<'de> PduDecode<'de> for FormatListResponse {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FormatListResponse {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let header = PartialHeader::decode(src)?;
         match header.message_flags {
             ClipboardPduFlags::RESPONSE_OK => Ok(FormatListResponse::Ok),
             ClipboardPduFlags::RESPONSE_FAIL => Ok(FormatListResponse::Fail),
-            _ => Err(invalid_message_err!("msgFlags", "Invalid format list message flags")),
+            _ => Err(invalid_field_err!("msgFlags", "Invalid format list message flags")),
         }
     }
 }

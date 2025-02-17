@@ -1,5 +1,5 @@
+use ironrdp_core::{decode, DecodeError};
 use ironrdp_pdu::bitmap::rdp6::{BitmapStream as BitmapStreamPdu, ColorPlaneDefinition};
-use ironrdp_pdu::{decode, PduError};
 use thiserror::Error;
 
 use crate::color_conversion::Rgb;
@@ -8,7 +8,7 @@ use crate::rdp6::rle::{decompress_8bpp_plane, RleDecodeError};
 #[derive(Debug, Error)]
 pub enum BitmapDecodeError {
     #[error("failed to decode RDP6 bitmap stream PDU: {0}")]
-    Pdu(#[from] PduError),
+    Decode(#[from] DecodeError),
     #[error("failed to perform RLE decompression of RDP6 bitmap stream: {0}")]
     Rle(#[from] RleDecodeError),
     #[error("color plane data size provided in PDU is not sufficient to reconstruct the bitmap")]
@@ -143,7 +143,7 @@ impl<'a> BitmapStreamDecoderImpl<'a> {
     }
 
     fn write_argb_planes_to_rgb24(&self, planes: &[u8], dst: &mut Vec<u8>) {
-        // For ARGB comversion is simple - just copy data in correct order
+        // For ARGB conversion is simple - just copy data in correct order
         let (r_offset, g_offset, b_offset) = (
             self.color_plane_offsets[0],
             self.color_plane_offsets[1],
@@ -162,6 +162,7 @@ impl<'a> BitmapStreamDecoderImpl<'a> {
     }
 
     fn write_aycocg_planes_to_rgb24(&self, params: AYCoCgParams, planes: &[u8], dst: &mut Vec<u8>) {
+        #![allow(clippy::similar_names)] // It’s hard to find better names for co, cg, etc.
         let sample_shift = params.chroma_subsampling as usize;
 
         let (y_offset, co_offset, cg_offset) = (
@@ -222,8 +223,10 @@ impl<'a> BitmapStreamDecoderImpl<'a> {
     }
 }
 
-/// Perform YCoCg -> RGB conversion with color loss redution (CLL) correction.
+/// Perform YCoCg -> RGB conversion with color loss reduction (CLL) correction.
 fn ycocg_with_cll_to_rgb(cll: u8, y: u8, co: u8, cg: u8) -> Rgb {
+    #![allow(clippy::similar_names)] // It’s hard to find better names for co, cg, etc.
+
     // We decrease CLL by 1 to skip division by 2 for co & cg components during computation of
     // the following color conversion matrix:
     // |R|   |1   1/2   -1/2|   |Y |

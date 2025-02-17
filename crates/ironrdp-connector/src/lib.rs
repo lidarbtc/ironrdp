@@ -1,5 +1,5 @@
-#[cfg(windows)]
-extern crate winapi;
+#![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://cdnweb.devolutions.net/images/projects/devolutions/logos/devolutions-icon-shadow.svg")]
 
 #[macro_use]
 extern crate tracing;
@@ -17,19 +17,22 @@ pub mod credssp;
 mod license_exchange;
 mod server_name;
 
-use core::any::Any;
-use core::fmt;
-
+pub use crate::license_exchange::LicenseCache;
 pub use channel_connection::{ChannelConnectionSequence, ChannelConnectionState};
 pub use connection::{encode_send_data_request, ClientConnector, ClientConnectorState, ConnectionResult};
 pub use connection_finalization::{ConnectionFinalizationSequence, ConnectionFinalizationState};
+use core::any::Any;
+use core::fmt;
+use ironrdp_core::{encode_buf, encode_vec, Encode, WriteBuf};
+use ironrdp_pdu::nego::NegoRequestData;
 use ironrdp_pdu::rdp::capability_sets;
 use ironrdp_pdu::rdp::client_info::PerformanceFlags;
-use ironrdp_pdu::write_buf::WriteBuf;
-use ironrdp_pdu::{encode_buf, encode_vec, gcc, x224, PduEncode, PduHint};
+use ironrdp_pdu::x224::X224;
+use ironrdp_pdu::{gcc, x224, PduHint};
 pub use license_exchange::{LicenseExchangeSequence, LicenseExchangeState};
 pub use server_name::ServerName;
 pub use sspi;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -67,15 +70,15 @@ pub enum Credentials {
     },
     SmartCard {
         pin: String,
-        config: Option<Box<SmartCardIdentity>>,
+        config: Option<SmartCardIdentity>,
     },
 }
 
 impl Credentials {
-    fn username(&self) -> &str {
+    fn username(&self) -> Option<&str> {
         match self {
-            Self::UsernamePassword { username, .. } => username,
-            Self::SmartCard { .. } => "", // Username is ultimately provided by the smart card certificate.
+            Self::UsernamePassword { username, .. } => Some(username),
+            Self::SmartCard { .. } => None, // Username is ultimately provided by the smart card certificate.
         }
     }
 
@@ -130,7 +133,7 @@ pub struct Config {
     ///
     /// The PROTOCOL_HYBRID and PROTOCOL_HYBRID_EX flags will be set.
     ///
-    /// NLA is allowing authentication to be performed before session establishement.
+    /// NLA is allowing authentication to be performed before session establishment.
     ///
     /// This option includes the extended CredSSP early user authorization result PDU.
     /// This PDU is used by the server to deny access before any credentials (except for the username)
@@ -159,8 +162,20 @@ pub struct Config {
     pub dig_product_id: String,
     pub client_dir: String,
     pub platform: capability_sets::MajorPlatformType,
+    /// Unique identifier for the computer
+    ///
+    ///  Each 32-bit integer contains client hardware-specific data helping the server uniquely identify the client.
+    pub hardware_id: Option<[u32; 4]>,
+    /// Optional data for the x224 connection request.
+    ///
+    /// Fallbacks to a sensible default depending on the provided credentials:
+    ///
+    /// - A cookie containing the username for a username/password.
+    /// - Nothing for a smart card.
+    pub request_data: Option<NegoRequestData>,
     /// If true, the INFO_AUTOLOGON flag is set in the [`ClientInfoPdu`](ironrdp_pdu::rdp::ClientInfoPdu)
     pub autologon: bool,
+    pub license_cache: Option<Arc<dyn LicenseCache>>,
 
     // FIXME(@CBenoit): these are client-only options, not part of the connector.
     pub no_server_pointer: bool,
@@ -168,7 +183,7 @@ pub struct Config {
     pub performance_flags: PerformanceFlags,
 }
 
-ironrdp_pdu::assert_impl!(Config: Send, Sync);
+ironrdp_core::assert_impl!(Config: Send, Sync);
 
 pub trait State: Send + fmt::Debug + 'static {
     fn name(&self) -> &'static str;
@@ -176,7 +191,7 @@ pub trait State: Send + fmt::Debug + 'static {
     fn as_any(&self) -> &dyn Any;
 }
 
-ironrdp_pdu::assert_obj_safe!(State);
+ironrdp_core::assert_obj_safe!(State);
 
 pub fn state_downcast<T: State>(state: &dyn State) -> Option<&T> {
     state.as_any().downcast_ref()
@@ -241,14 +256,15 @@ pub trait Sequence: Send {
     }
 }
 
-ironrdp_pdu::assert_obj_safe!(Sequence);
+ironrdp_core::assert_obj_safe!(Sequence);
 
 pub type ConnectorResult<T> = Result<T, ConnectorError>;
 
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum ConnectorErrorKind {
-    Pdu(ironrdp_pdu::PduError),
+    Encode(ironrdp_core::EncodeError),
+    Decode(ironrdp_core::DecodeError),
     Credssp(sspi::Error),
     Reason(String),
     AccessDenied,
@@ -259,7 +275,8 @@ pub enum ConnectorErrorKind {
 impl fmt::Display for ConnectorErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            ConnectorErrorKind::Pdu(_) => write!(f, "PDU error"),
+            ConnectorErrorKind::Encode(_) => write!(f, "encode error"),
+            ConnectorErrorKind::Decode(_) => write!(f, "decode error"),
             ConnectorErrorKind::Credssp(_) => write!(f, "CredSSP"),
             ConnectorErrorKind::Reason(description) => write!(f, "reason: {description}"),
             ConnectorErrorKind::AccessDenied => write!(f, "access denied"),
@@ -272,7 +289,8 @@ impl fmt::Display for ConnectorErrorKind {
 impl std::error::Error for ConnectorErrorKind {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self {
-            ConnectorErrorKind::Pdu(e) => Some(e),
+            ConnectorErrorKind::Encode(e) => Some(e),
+            ConnectorErrorKind::Decode(e) => Some(e),
             ConnectorErrorKind::Credssp(e) => Some(e),
             ConnectorErrorKind::Reason(_) => None,
             ConnectorErrorKind::AccessDenied => None,
@@ -285,7 +303,8 @@ impl std::error::Error for ConnectorErrorKind {
 pub type ConnectorError = ironrdp_error::Error<ConnectorErrorKind>;
 
 pub trait ConnectorErrorExt {
-    fn pdu(error: ironrdp_pdu::PduError) -> Self;
+    fn encode(error: ironrdp_core::EncodeError) -> Self;
+    fn decode(error: ironrdp_core::DecodeError) -> Self;
     fn general(context: &'static str) -> Self;
     fn reason(context: &'static str, reason: impl Into<String>) -> Self;
     fn custom<E>(context: &'static str, e: E) -> Self
@@ -294,8 +313,12 @@ pub trait ConnectorErrorExt {
 }
 
 impl ConnectorErrorExt for ConnectorError {
-    fn pdu(error: ironrdp_pdu::PduError) -> Self {
-        Self::new("invalid payload", ConnectorErrorKind::Pdu(error))
+    fn encode(error: ironrdp_core::EncodeError) -> Self {
+        Self::new("encode error", ConnectorErrorKind::Encode(error))
+    }
+
+    fn decode(error: ironrdp_core::DecodeError) -> Self {
+        Self::new("decode error", ConnectorErrorKind::Decode(error))
     }
 
     fn general(context: &'static str) -> Self {
@@ -341,15 +364,15 @@ impl<T> ConnectorResultExt for ConnectorResult<T> {
 
 pub fn encode_x224_packet<T>(x224_msg: &T, buf: &mut WriteBuf) -> ConnectorResult<usize>
 where
-    T: PduEncode,
+    T: Encode,
 {
-    let x224_msg_buf = encode_vec(x224_msg).map_err(ConnectorError::pdu)?;
+    let x224_msg_buf = encode_vec(x224_msg).map_err(ConnectorError::encode)?;
 
     let pdu = x224::X224Data {
         data: std::borrow::Cow::Owned(x224_msg_buf),
     };
 
-    let written = encode_buf(&pdu, buf).map_err(ConnectorError::pdu)?;
+    let written = encode_buf(&X224(pdu), buf).map_err(ConnectorError::encode)?;
 
     Ok(written)
 }

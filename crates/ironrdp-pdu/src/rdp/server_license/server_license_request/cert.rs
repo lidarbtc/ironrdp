@@ -1,8 +1,9 @@
-use super::{BlobHeader, BlobType, KEY_EXCHANGE_ALGORITHM_RSA};
-use crate::{
-    cursor::{ReadCursor, WriteCursor},
-    PduDecode, PduEncode, PduResult,
+use ironrdp_core::{
+    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
+    ReadCursor, WriteCursor,
 };
+
+use super::{BlobHeader, BlobType, KEY_EXCHANGE_ALGORITHM_RSA};
 
 pub const SIGNATURE_ALGORITHM_RSA: u32 = 1;
 pub const PROP_CERT_NO_BLOBS_SIZE: usize = 8;
@@ -35,8 +36,8 @@ impl X509CertificateChain {
     const NAME: &'static str = "X509CertificateChain";
 }
 
-impl PduEncode for X509CertificateChain {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for X509CertificateChain {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(cast_length!("certArrayLen", self.certificate_array.len())?);
@@ -67,12 +68,12 @@ impl PduEncode for X509CertificateChain {
     }
 }
 
-impl<'de> PduDecode<'de> for X509CertificateChain {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for X509CertificateChain {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_size!(in: src, size: 4);
         let certificate_count = cast_length!("certArrayLen", src.read_u32())?;
         if !(MIN_CERTIFICATE_AMOUNT..MAX_CERTIFICATE_AMOUNT).contains(&certificate_count) {
-            return Err(invalid_message_err!("certArrayLen", "invalid x509 certificate amount"));
+            return Err(invalid_field_err!("certArrayLen", "invalid x509 certificate amount"));
         }
 
         let certificate_array: Vec<_> = (0..certificate_count)
@@ -80,7 +81,7 @@ impl<'de> PduDecode<'de> for X509CertificateChain {
                 ensure_size!(in: src, size: 4);
                 let certificate_len = cast_length!("certLen", src.read_u32())?;
                 if certificate_len > MAX_CERTIFICATE_LEN {
-                    return Err(invalid_message_err!("certLen", "invalid x509 certificate length"));
+                    return Err(invalid_field_err!("certLen", "invalid x509 certificate length"));
                 }
 
                 ensure_size!(in: src, size: certificate_len);
@@ -113,8 +114,8 @@ impl ProprietaryCertificate {
     const FIXED_PART_SIZE: usize = PROP_CERT_BLOBS_HEADERS_SIZE + PROP_CERT_NO_BLOBS_SIZE;
 }
 
-impl PduEncode for ProprietaryCertificate {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for ProprietaryCertificate {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(SIGNATURE_ALGORITHM_RSA);
@@ -138,29 +139,29 @@ impl PduEncode for ProprietaryCertificate {
     }
 }
 
-impl<'de> PduDecode<'de> for ProprietaryCertificate {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for ProprietaryCertificate {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_size!(in: src, size: PROP_CERT_NO_BLOBS_SIZE);
 
         let signature_algorithm_id = src.read_u32();
         if signature_algorithm_id != SIGNATURE_ALGORITHM_RSA {
-            return Err(invalid_message_err!("sigAlgId", "invalid signature algorithm ID"));
+            return Err(invalid_field_err!("sigAlgId", "invalid signature algorithm ID"));
         }
 
         let key_algorithm_id = src.read_u32();
         if key_algorithm_id != KEY_EXCHANGE_ALGORITHM_RSA {
-            return Err(invalid_message_err!("keyAlgId", "invalid key algorithm ID"));
+            return Err(invalid_field_err!("keyAlgId", "invalid key algorithm ID"));
         }
 
         let key_blob_header = BlobHeader::decode(src)?;
         if key_blob_header.blob_type != BlobType::RSA_KEY {
-            return Err(invalid_message_err!("blobType", "invalid blob type"));
+            return Err(invalid_field_err!("blobType", "invalid blob type"));
         }
         let public_key = RsaPublicKey::decode(src)?;
 
         let sig_blob_header = BlobHeader::decode(src)?;
         if sig_blob_header.blob_type != BlobType::RSA_SIGNATURE {
-            return Err(invalid_message_err!("blobType", "invalid blob type"));
+            return Err(invalid_field_err!("blobType", "invalid blob type"));
         }
         ensure_size!(in: src, size: sig_blob_header.length);
         let signature = src.read_slice(sig_blob_header.length).into();
@@ -181,8 +182,8 @@ impl RsaPublicKey {
     const FIXED_PART_SIZE: usize = RSA_KEY_SIZE_WITHOUT_MODULUS;
 }
 
-impl PduEncode for RsaPublicKey {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for RsaPublicKey {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
         let keylen = cast_length!("modulusLen", self.modulus.len())?;
@@ -208,29 +209,29 @@ impl PduEncode for RsaPublicKey {
     }
 }
 
-impl<'de> PduDecode<'de> for RsaPublicKey {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for RsaPublicKey {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let magic = src.read_u32();
         if magic != RSA_SENTINEL {
-            return Err(invalid_message_err!("magic", "invalid RSA public key magic"));
+            return Err(invalid_field_err!("magic", "invalid RSA public key magic"));
         }
 
         let keylen = cast_length!("keyLen", src.read_u32())?;
 
         let bitlen: usize = cast_length!("bitlen", src.read_u32())?;
         if keylen != (bitlen / 8) + 8 {
-            return Err(invalid_message_err!("bitlen", "invalid RSA public key length"));
+            return Err(invalid_field_err!("bitlen", "invalid RSA public key length"));
         }
 
         if bitlen < 8 {
-            return Err(invalid_message_err!("bitlen", "invalid RSA public key length"));
+            return Err(invalid_field_err!("bitlen", "invalid RSA public key length"));
         }
 
         let datalen: usize = cast_length!("dataLen", src.read_u32())?;
         if datalen != (bitlen / 8) - 1 {
-            return Err(invalid_message_err!("dataLen", "invalid RSA public key data length"));
+            return Err(invalid_field_err!("dataLen", "invalid RSA public key data length"));
         }
 
         let public_exponent = src.read_u32();

@@ -2,9 +2,7 @@
 mod tests;
 
 use bitflags::bitflags;
-
-use crate::cursor::{ReadCursor, WriteCursor};
-use crate::{PduDecode, PduEncode, PduResult};
+use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
 
 const SURFACE_COMMANDS_LENGTH: usize = 8;
 
@@ -28,8 +26,8 @@ impl SurfaceCommands {
     const FIXED_PART_SIZE: usize = SURFACE_COMMANDS_LENGTH;
 }
 
-impl PduEncode for SurfaceCommands {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for SurfaceCommands {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
         dst.write_u32(self.flags.bits());
@@ -47,8 +45,8 @@ impl PduEncode for SurfaceCommands {
     }
 }
 
-impl<'de> PduDecode<'de> for SurfaceCommands {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for SurfaceCommands {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let flags = CmdFlags::from_bits_truncate(src.read_u32());

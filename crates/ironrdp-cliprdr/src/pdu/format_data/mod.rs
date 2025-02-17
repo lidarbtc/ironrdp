@@ -9,11 +9,12 @@ pub use self::palette::*;
 #[rustfmt::skip]
 use std::borrow::Cow;
 
-use ironrdp_pdu::cursor::{ReadCursor, WriteCursor};
-use ironrdp_pdu::utils::{read_string_from_cursor, to_utf16_bytes, CharacterSet};
-use ironrdp_pdu::{
-    cast_int, ensure_fixed_part_size, ensure_size, impl_pdu_borrowing, IntoOwnedPdu, PduDecode, PduEncode, PduResult,
+use ironrdp_core::{
+    cast_int, ensure_fixed_part_size, ensure_size, Decode, DecodeResult, Encode, EncodeResult, IntoOwned, ReadCursor,
+    WriteCursor,
 };
+use ironrdp_pdu::impl_pdu_borrowing;
+use ironrdp_pdu::utils::{read_string_from_cursor, to_utf16_bytes, CharacterSet};
 
 use super::ClipboardFormatId;
 use crate::pdu::{ClipboardPduFlags, PartialHeader};
@@ -27,10 +28,10 @@ pub struct FormatDataResponse<'a> {
 
 impl_pdu_borrowing!(FormatDataResponse<'_>, OwnedFormatDataResponse);
 
-impl IntoOwnedPdu for FormatDataResponse<'_> {
+impl IntoOwned for FormatDataResponse<'_> {
     type Owned = OwnedFormatDataResponse;
 
-    fn into_owned_pdu(self) -> Self::Owned {
+    fn into_owned(self) -> Self::Owned {
         OwnedFormatDataResponse {
             is_error: self.is_error,
             data: Cow::Owned(self.data.into_owned()),
@@ -68,7 +69,7 @@ impl<'a> FormatDataResponse<'a> {
     /// Creates new format data response from clipboard palette. Please note that this method
     /// allocates memory for the data automatically. If you want to avoid this, you can use
     /// `new_data` method and encode [`ClipboardPalette`] prior to the call.
-    pub fn new_palette(palette: &ClipboardPalette) -> PduResult<Self> {
+    pub fn new_palette(palette: &ClipboardPalette) -> EncodeResult<Self> {
         let mut data = vec![0u8; palette.size()];
 
         let mut cursor = WriteCursor::new(&mut data);
@@ -83,7 +84,7 @@ impl<'a> FormatDataResponse<'a> {
     /// Creates new format data response from packed metafile. Please note that this method
     /// allocates memory for the data automatically. If you want to avoid this, you can use
     /// `new_data` method and encode [`PackedMetafile`] prior to the call.
-    pub fn new_metafile(metafile: &PackedMetafile<'_>) -> PduResult<Self> {
+    pub fn new_metafile(metafile: &PackedMetafile<'_>) -> EncodeResult<Self> {
         let mut data = vec![0u8; metafile.size()];
 
         let mut cursor = WriteCursor::new(&mut data);
@@ -98,7 +99,7 @@ impl<'a> FormatDataResponse<'a> {
     /// Creates new format data response from packed file list. Please note that this method
     /// allocates memory for the data automatically. If you want to avoid this, you can use
     /// `new_data` method and encode [`PackedFileList`] prior to the call.
-    pub fn new_file_list(list: &PackedFileList) -> PduResult<Self> {
+    pub fn new_file_list(list: &PackedFileList) -> EncodeResult<Self> {
         let mut data = vec![0u8; list.size()];
 
         let mut cursor = WriteCursor::new(&mut data);
@@ -134,37 +135,33 @@ impl<'a> FormatDataResponse<'a> {
     }
 
     /// Reads inner data as [`ClipboardPalette`]
-    pub fn to_palette(&self) -> PduResult<ClipboardPalette> {
+    pub fn to_palette(&self) -> DecodeResult<ClipboardPalette> {
         let mut cursor = ReadCursor::new(&self.data);
         ClipboardPalette::decode(&mut cursor)
     }
 
     /// Reads inner data as [`PackedMetafile`]
-    pub fn to_metafile(&self) -> PduResult<PackedMetafile<'_>> {
+    pub fn to_metafile(&self) -> DecodeResult<PackedMetafile<'_>> {
         let mut cursor = ReadCursor::new(&self.data);
         PackedMetafile::decode(&mut cursor)
     }
 
     /// Reads inner data as [`PackedFileList`]
-    pub fn to_file_list(&self) -> PduResult<PackedFileList> {
+    pub fn to_file_list(&self) -> DecodeResult<PackedFileList> {
         let mut cursor = ReadCursor::new(&self.data);
         PackedFileList::decode(&mut cursor)
     }
 
     /// Reads inner data as string
-    pub fn to_string(&self) -> PduResult<String> {
+    pub fn to_string(&self) -> DecodeResult<String> {
         let mut cursor = ReadCursor::new(&self.data);
         read_string_from_cursor(&mut cursor, CharacterSet::Ansi, true)
     }
 
     /// Reads inner data as unicode string
-    pub fn to_unicode_string(&self) -> PduResult<String> {
+    pub fn to_unicode_string(&self) -> DecodeResult<String> {
         let mut cursor = ReadCursor::new(&self.data);
         read_string_from_cursor(&mut cursor, CharacterSet::Unicode, true)
-    }
-
-    pub fn into_owned(self) -> OwnedFormatDataResponse {
-        self.into_owned_pdu()
     }
 
     pub fn into_data(self) -> Cow<'a, [u8]> {
@@ -172,8 +169,8 @@ impl<'a> FormatDataResponse<'a> {
     }
 }
 
-impl PduEncode for FormatDataResponse<'_> {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FormatDataResponse<'_> {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         let flags = if self.is_error {
             ClipboardPduFlags::RESPONSE_FAIL
         } else {
@@ -198,8 +195,8 @@ impl PduEncode for FormatDataResponse<'_> {
     }
 }
 
-impl<'de> PduDecode<'de> for FormatDataResponse<'de> {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FormatDataResponse<'de> {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let header = PartialHeader::decode(src)?;
 
         let is_error = header.message_flags.contains(ClipboardPduFlags::RESPONSE_FAIL);
@@ -225,8 +222,8 @@ impl FormatDataRequest {
     const FIXED_PART_SIZE: usize = 4 /* format */;
 }
 
-impl PduEncode for FormatDataRequest {
-    fn encode(&self, dst: &mut WriteCursor<'_>) -> PduResult<()> {
+impl Encode for FormatDataRequest {
+    fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         let header = PartialHeader::new(cast_int!("dataLen", Self::FIXED_PART_SIZE)?);
         header.encode(dst)?;
 
@@ -245,8 +242,8 @@ impl PduEncode for FormatDataRequest {
     }
 }
 
-impl<'de> PduDecode<'de> for FormatDataRequest {
-    fn decode(src: &mut ReadCursor<'de>) -> PduResult<Self> {
+impl<'de> Decode<'de> for FormatDataRequest {
+    fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         let _header = PartialHeader::decode(src)?;
 
         ensure_fixed_part_size!(in: src);
