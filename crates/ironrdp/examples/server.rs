@@ -14,15 +14,14 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context as _;
 use ironrdp::cliprdr::backend::{CliprdrBackend, CliprdrBackendFactory};
 use ironrdp::connector::DesktopSize;
-use ironrdp::rdpsnd::pdu::ClientAudioFormatPdu;
-use ironrdp::rdpsnd::pdu::{AudioFormat, WaveFormat};
+use ironrdp::rdpsnd::pdu::{AudioFormat, ClientAudioFormatPdu, WaveFormat};
 use ironrdp::rdpsnd::server::{RdpsndServerHandler, RdpsndServerMessage};
 use ironrdp::server::tokio::sync::mpsc::UnboundedSender;
 use ironrdp::server::tokio::time::{self, sleep, Duration};
 use ironrdp::server::{
     tokio, BitmapUpdate, CliprdrServerFactory, Credentials, DisplayUpdate, KeyboardEvent, MouseEvent, PixelFormat,
-    PixelOrder, RdpServer, RdpServerDisplay, RdpServerDisplayUpdates, RdpServerInputHandler, ServerEvent,
-    ServerEventSender, SoundServerFactory, TlsIdentityCtx,
+    RdpServer, RdpServerDisplay, RdpServerDisplayUpdates, RdpServerInputHandler, ServerEvent, ServerEventSender,
+    SoundServerFactory, TlsIdentityCtx,
 };
 use ironrdp_cliprdr_native::StubCliprdrBackend;
 use rand::prelude::*;
@@ -160,10 +159,10 @@ impl RdpServerDisplayUpdates for DisplayUpdates {
         sleep(Duration::from_millis(100)).await;
         let mut rng = thread_rng();
 
-        let top: u16 = rng.gen_range(0..HEIGHT);
-        let height = NonZeroU16::new(rng.gen_range(1..=HEIGHT.checked_sub(top).unwrap())).unwrap();
-        let left: u16 = rng.gen_range(0..WIDTH);
-        let width = NonZeroU16::new(rng.gen_range(1..=WIDTH.checked_sub(left).unwrap())).unwrap();
+        let y: u16 = rng.gen_range(0..HEIGHT);
+        let height = NonZeroU16::new(rng.gen_range(1..=HEIGHT.checked_sub(y).unwrap())).unwrap();
+        let x: u16 = rng.gen_range(0..WIDTH);
+        let width = NonZeroU16::new(rng.gen_range(1..=WIDTH.checked_sub(x).unwrap())).unwrap();
         let capacity = usize::from(width.get())
             .checked_mul(usize::from(height.get()))
             .unwrap()
@@ -177,15 +176,14 @@ impl RdpServerDisplayUpdates for DisplayUpdates {
             data.push(255);
         }
 
-        info!("get_update +{left}+{top} {width}x{height}");
+        info!("get_update +{x}+{y} {width}x{height}");
         let bitmap = BitmapUpdate {
-            top,
-            left,
+            x,
+            y,
             width,
             height,
             format: PixelFormat::BgrA32,
-            order: PixelOrder::TopToBottom,
-            data,
+            data: data.into(),
             stride: usize::from(width.get()).checked_mul(4).unwrap(),
         };
         Some(DisplayUpdate::Bitmap(bitmap))

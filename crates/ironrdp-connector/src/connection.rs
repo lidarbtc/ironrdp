@@ -1,12 +1,13 @@
 use core::mem;
+use std::borrow::Cow;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use ironrdp_core::{decode, encode_vec, Encode, WriteBuf};
 use ironrdp_pdu::rdp::client_info::{OptionalSystemTime, TimezoneInfo};
 use ironrdp_pdu::x224::X224;
 use ironrdp_pdu::{gcc, mcs, nego, rdp, PduHint};
 use ironrdp_svc::{StaticChannelSet, StaticVirtualChannel, SvcClientProcessor};
-use std::borrow::Cow;
-use std::net::SocketAddr;
-use std::sync::Arc;
 
 use crate::channel_connection::{ChannelConnectionSequence, ChannelConnectionState};
 use crate::connection_activation::{ConnectionActivationSequence, ConnectionActivationState};
@@ -728,7 +729,6 @@ fn create_client_info_pdu(config: &Config, routing_addr: &SocketAddr) -> rdp::Cl
         | ClientInfoFlags::DISABLE_CTRL_ALT_DEL
         | ClientInfoFlags::LOGON_NOTIFY
         | ClientInfoFlags::LOGON_ERRORS
-        | ClientInfoFlags::NO_AUDIO_PLAYBACK
         | ClientInfoFlags::VIDEO_DISABLE
         | ClientInfoFlags::ENABLE_WINDOWS_KEY
         | ClientInfoFlags::MAXIMIZE_SHELL;
@@ -739,6 +739,10 @@ fn create_client_info_pdu(config: &Config, routing_addr: &SocketAddr) -> rdp::Cl
 
     if let crate::Credentials::SmartCard { .. } = &config.credentials {
         flags |= ClientInfoFlags::PASSWORD_IS_SC_PIN;
+    }
+
+    if config.no_audio_playback {
+        flags |= ClientInfoFlags::NO_AUDIO_PLAYBACK;
     }
 
     let client_info = ClientInfo {
@@ -754,8 +758,8 @@ fn create_client_info_pdu(config: &Config, routing_addr: &SocketAddr) -> rdp::Cl
         work_dir: String::new(),
         extra_info: ExtendedClientInfo {
             address_family: match routing_addr {
-                SocketAddr::V4(_) => AddressFamily::INet,
-                SocketAddr::V6(_) => AddressFamily::INet6,
+                SocketAddr::V4(_) => AddressFamily::INET,
+                SocketAddr::V6(_) => AddressFamily::INET_6,
             },
             address: routing_addr.ip().to_string(),
             dir: config.client_dir.clone(),

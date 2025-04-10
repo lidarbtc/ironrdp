@@ -12,8 +12,7 @@
     let gatewayAddress = 'ws://localhost:7171/jet/rdp';
     let hostname = '10.10.0.3:3389';
     let domain = '';
-    let authtoken =
-        'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImN0eSI6IkFTU09DSUFUSU9OIn0.eyJkc3RfaHN0IjoiMTkyLjE2OC41Ni4xMDE6MzM4OSIsImV4cCI6MTY5MzQyMzY1NSwiamV0X2FpZCI6IjMwNzZjZGIwLWYxNTctNDJlNy1iOWMzLThhMTdlNDFkYjYwNyIsImpldF9hcCI6InJkcCIsImpldF9jbSI6ImZ3ZCIsImp0aSI6IjAwYjY4OTY2LWJiYjAtNDU0NS05ZDZiLWRjNmFmMjAzNjY5MiIsIm5iZiI6MTY5MzQyMjc1NX0.SYQv4HtWQbdHMHgoCLYejCfO3TtsMAyjjILB6-Nir3mBznKiSad3POeLf02n05JFc5QhCeSGxspAaoNU7-znQFhHr0Tt0MnZJ1YMQt4UoR3PR2fTuUqv8M5TKdm4lKwCIjh73tTD001glTkXHaxuCQBTFCUSzfZhXDIqq5-CQueKtCrgJfYepJLmlvgH-ujGcxfXoGJGmeUy3Fmaijiy0uaC98j9GNCfnAd6JENmSAOkxfroMFhq601PSEizRbPzq2exDakfJ0EkaANz15udBX1a7NP-RyANHWQb8hp0rj6hyuyg1-vfUKYusw5qNUjAGXaWOjHC5bLgnqfE2V8Xnw';
+    let authtoken = '';
     let kdc_proxy_url = '';
     let desktopSize: DesktopSize = {
         width: 1280,
@@ -21,6 +20,7 @@
     };
     let pcb: string;
     let pop_up = false;
+    let enable_clipboard = true;
 
     let userInteraction: UserInteraction;
 
@@ -43,13 +43,53 @@
             } else {
                 toast.set({
                     type: 'info',
-                    message: typeof event.data !== 'string' ? event.data.backtrace() : event.data ?? 'No info',
+                    message: typeof event.data === 'string' ? event.data : event.data?.backtrace() ?? 'No info',
                 });
             }
         });
     };
 
-    const StartSession = () => {
+    const StartSession = async () => {
+        if (authtoken === '') {
+            const token_server_url = import.meta.env.VITE_IRON_TOKEN_SERVER_URL as string | undefined;
+            if (token_server_url === undefined || token_server_url.trim() === '') {
+                toast.set({
+                    type: 'error',
+                    message: 'Token server is not set and no token provided',
+                });
+                throw new Error('Token server is not set and no token provided');
+            }
+            try {
+                const response = await fetch(`${token_server_url}/forward`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        dst_hst: hostname,
+                        jet_ap: 'rdp',
+                        jet_ttl: 3600,
+                        jet_rec: false,
+                    }),
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    authtoken = data.token;
+                } else if (data.error !== undefined) {
+                    throw new Error(data.error);
+                } else {
+                    throw new Error('Unknown error occurred');
+                }
+            } catch (error) {
+                console.error('Error fetching token:', error);
+                toast.set({
+                    type: 'error',
+                    message: 'Error fetching token',
+                });
+            }
+        }
+
         toast.set({
             type: 'info',
             message: 'Connection in progress...',
@@ -66,6 +106,7 @@
                 desktopSize,
                 pcb,
                 kdc_proxy_url,
+                enable_clipboard,
             });
             const base64Data = btoa(data);
             window.open(
@@ -76,6 +117,7 @@
             return;
         }
 
+        userInteraction.setEnableClipboard(enable_clipboard);
         from(
             userInteraction.connect(
                 username,
@@ -98,7 +140,7 @@
                     });
                     return of(null);
                 }),
-                filter((result) => !!result),
+                filter((result) => result !== null && result !== undefined), // Explicitly checking for null/undefined
             )
             .subscribe((start_info: NewSessionInfo | null) => {
                 if (start_info != null && start_info.initial_desktop_size !== null) {
@@ -124,73 +166,83 @@
     };
 </script>
 
-<main class="responsive">
-    <div class="large-space" />
-    <div class="grid">
-        <div class="s2" />
-        <div class="s8">
-            <article class="primary-container">
-                <h5>Login</h5>
-                <div class="medium-space" />
-                <div>
-                    <div class="field label border">
-                        <input id="hostname" type="text" bind:value={hostname} />
-                        <label for="hostname">Hostname</label>
-                    </div>
-                    <div class="field label border">
-                        <input id="domain" type="text" bind:value={domain} />
-                        <label for="domain">Domain</label>
-                    </div>
-                    <div class="field label border">
-                        <input id="username" type="text" bind:value={username} />
-                        <label for="username">Username</label>
-                    </div>
-                    <div class="field label border">
-                        <input id="password" type="password" bind:value={password} />
-                        <label for="password">Password</label>
-                    </div>
-                    <div class="field label border">
-                        <input id="gatewayAddress" type="text" bind:value={gatewayAddress} />
-                        <label for="gatewayAddress">Gateway Address</label>
-                    </div>
-                    <div class="field label border">
-                        <input id="authtoken" type="text" bind:value={authtoken} />
-                        <label for="authtoken">AuthToken</label>
-                    </div>
-                    <div class="field label border">
-                        <input id="pcb" type="text" bind:value={pcb} />
-                        <label for="pcb">Pre Connection Blob</label>
-                    </div>
-                    <div class="field label border">
-                        <input id="desktopSizeW" type="text" bind:value={desktopSize.width} />
-                        <label for="desktopSizeW">Desktop Width</label>
-                    </div>
-                    <div class="field label border">
-                        <input id="desktopSizeH" type="text" bind:value={desktopSize.height} />
-                        <label for="desktopSizeH">Desktop Height</label>
-                    </div>
-                    <div class="field label border">
-                        <input id="kdc_proxy_url" type="text" bind:value={kdc_proxy_url} />
-                        <label for="kdc_proxy_url">KDC Proxy URL</label>
-                    </div>
-                    <div class="field label border">
-                        <div style="display: flex; height: 100%; align-items: center; font-size: 1.5em;">
-                            <input
-                                id="use_pop_up"
-                                type="checkbox"
-                                bind:value={pop_up}
-                                style="width: 1.5em; height: 1.5em; margin-right: 0.5em;"
-                            />
-                            <label for="use_pop_up">Use Pop Up</label>
+<main class="responsive login-container">
+    <div class="login-content">
+        <div class="grid">
+            <div class="s2" />
+            <div class="s8">
+                <article class="primary-container">
+                    <h5>Login</h5>
+                    <div class="medium-space" />
+                    <div>
+                        <div class="field label border">
+                            <input id="hostname" type="text" bind:value={hostname} />
+                            <label for="hostname">Hostname</label>
+                        </div>
+                        <div class="field label border">
+                            <input id="domain" type="text" bind:value={domain} />
+                            <label for="domain">Domain</label>
+                        </div>
+                        <div class="field label border">
+                            <input id="username" type="text" bind:value={username} />
+                            <label for="username">Username</label>
+                        </div>
+                        <div class="field label border">
+                            <input id="password" type="password" bind:value={password} />
+                            <label for="password">Password</label>
+                        </div>
+                        <div class="field label border">
+                            <input id="gatewayAddress" type="text" bind:value={gatewayAddress} />
+                            <label for="gatewayAddress">Gateway Address</label>
+                        </div>
+                        <div class="field label border">
+                            <input id="authtoken" type="text" bind:value={authtoken} />
+                            <label for="authtoken">AuthToken (Optional)</label>
+                        </div>
+                        <div class="field label border">
+                            <input id="pcb" type="text" bind:value={pcb} />
+                            <label for="pcb">Pre Connection Blob</label>
+                        </div>
+                        <div class="field label border">
+                            <input id="desktopSizeW" type="text" bind:value={desktopSize.width} />
+                            <label for="desktopSizeW">Desktop Width</label>
+                        </div>
+                        <div class="field label border">
+                            <input id="desktopSizeH" type="text" bind:value={desktopSize.height} />
+                            <label for="desktopSizeH">Desktop Height</label>
+                        </div>
+                        <div class="field label border">
+                            <input id="kdc_proxy_url" type="text" bind:value={kdc_proxy_url} />
+                            <label for="kdc_proxy_url">KDC Proxy URL</label>
+                        </div>
+                        <div class="field label border checkbox-container">
+                            <div class="checkbox-wrapper">
+                                <input
+                                    id="use_pop_up"
+                                    type="checkbox"
+                                    bind:checked={pop_up}
+                                    style="width: 1.5em; height: 1.5em; margin-right: 0.5em;"
+                                />
+                                <label for="use_pop_up">Use Pop Up</label>
+                            </div>
+                            <div class="checkbox-wrapper">
+                                <input
+                                    id="enable_clipboard"
+                                    type="checkbox"
+                                    bind:checked={enable_clipboard}
+                                    style="width: 1.5em; height: 1.5em; margin-right: 0.5em;"
+                                />
+                                <label for="enable_clipboard">Enable Clipboard</label>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <nav class="center-align">
-                    <button on:click={StartSession}>Login</button>
-                </nav>
-            </article>
+                    <nav class="center-align">
+                        <button on:click={StartSession}>Login</button>
+                    </nav>
+                </article>
+            </div>
+            <div class="s2" />
         </div>
-        <div class="s2" />
     </div>
 </main>
 

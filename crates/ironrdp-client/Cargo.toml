@@ -29,9 +29,8 @@ rustls = ["ironrdp-tls/rustls"]
 native-tls = ["ironrdp-tls/native-tls"]
 
 [dependencies]
-
 # Protocols
-ironrdp = { workspace = true, features = [
+ironrdp = { path = "../ironrdp", version = "0.9", features = [
     "session",
     "input",
     "graphics",
@@ -41,16 +40,17 @@ ironrdp = { workspace = true, features = [
     "rdpsnd",
     "cliprdr",
     "displaycontrol",
-    "connector"
+    "connector",
 ] }
-ironrdp-cliprdr-native.workspace = true
-ironrdp-rdpsnd-native.workspace = true
-ironrdp-tls.workspace = true
-ironrdp-tokio.workspace = true
-sspi = { workspace = true, features = [
-    "network_client",
-    "dns_resolver",
-] } # enable additional features
+ironrdp-core = { path = "../ironrdp-core", version = "0.1", features = [
+    "alloc",
+] }
+ironrdp-cliprdr-native = { path = "../ironrdp-cliprdr-native", version = "0.2" }
+ironrdp-rdpsnd-native = { path = "../ironrdp-rdpsnd-native", version = "0.2" }
+ironrdp-tls = { path = "../ironrdp-tls", version = "0.1" }
+ironrdp-tokio = { path = "../ironrdp-tokio", version = "0.3", features = [
+    "reqwest",
+] }
 
 # Windowing and rendering
 winit = { version = "0.30", features = ["rwh_06"] }
@@ -62,26 +62,23 @@ proc-exit = "2"
 inquire = "0.7"
 
 # Logging
-tracing.workspace = true
+tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Async, futures
 tokio = { version = "1", features = ["full"] }
 
 # Utils
-whoami = "1.5"
+whoami = "1.6"
 anyhow = "1"
-smallvec = "1.13"
+smallvec = "1.15"
 tap = "1"
 semver = "1"
-reqwest = "0.12"
-url = "2.5"
-raw-window-handle = "0.6.2"
-ironrdp-core = { workspace = true, features = ["alloc"] }
-uuid = { version = "1.12.1"}
+raw-window-handle = "0.6"
+uuid = { version = "1.16" }
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation"] }
+windows = { version = "0.61", features = ["Win32_Foundation"] }
 
 [lints]
 workspace = true

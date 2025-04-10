@@ -62,7 +62,7 @@ impl Processor {
         let mut input = ReadCursor::new(input);
 
         let header = decode_cursor::<FastPathHeader>(&mut input).map_err(SessionError::decode)?;
-        debug!(fast_path_header = ?header, "Received Fast-Path packet");
+        trace!(fast_path_header = ?header, "Received Fast-Path packet");
 
         let update_pdu = decode_cursor::<FastPathUpdatePdu<'_>>(&mut input).map_err(SessionError::decode)?;
         trace!(fast_path_update_fragmentation = ?update_pdu.fragmentation);
@@ -310,13 +310,11 @@ impl Processor {
         output: &mut WriteBuf,
         surface_commands: Vec<SurfaceCommand<'_>>,
     ) -> SessionResult<InclusiveRectangle> {
-        let mut update_rectangle = InclusiveRectangle::empty();
+        let mut update_rectangle = None;
 
         for command in surface_commands {
             match command {
                 SurfaceCommand::SetSurfaceBits(bits) | SurfaceCommand::StreamSurfaceBits(bits) => {
-                    trace!("Surface bits");
-
                     let codec_id = CodecId::from_u8(bits.extended_bitmap_data.codec_id).ok_or_else(|| {
                         reason_err!(
                             "Fast-Path",
@@ -324,6 +322,8 @@ impl Processor {
                             bits.extended_bitmap_data.codec_id
                         )
                     })?;
+
+                    trace!(?codec_id, "Surface bits");
 
                     let destination = bits.destination;
                     // TODO(@pacmancoder): Correct rectangle conversion logic should
@@ -341,7 +341,11 @@ impl Processor {
                             let ext_data = bits.extended_bitmap_data;
                             match ext_data.bpp {
                                 32 => {
-                                    image.apply_rgb32_bitmap(ext_data.data, PixelFormat::BgrX32, &destination)?;
+                                    let rectangle =
+                                        image.apply_rgb32_bitmap(ext_data.data, PixelFormat::BgrX32, &destination)?;
+                                    update_rectangle = update_rectangle
+                                        .map(|rect: InclusiveRectangle| rect.union(&rectangle))
+                                        .or(Some(rectangle));
                                 }
                                 bpp => {
                                     warn!("Unsupported bpp: {bpp}")
@@ -349,10 +353,12 @@ impl Processor {
                             }
                         }
                         CodecId::RemoteFx => {
-                            let mut data = bits.extended_bitmap_data.data;
+                            let mut data = ReadCursor::new(bits.extended_bitmap_data.data);
                             while !data.is_empty() {
                                 let (_frame_id, rectangle) = self.rfx_handler.decode(image, &destination, &mut data)?;
-                                update_rectangle = update_rectangle.union(&rectangle);
+                                update_rectangle = update_rectangle
+                                    .map(|rect: InclusiveRectangle| rect.union(&rectangle))
+                                    .or(Some(rectangle));
                             }
                         }
                     }
@@ -368,7 +374,7 @@ impl Processor {
             }
         }
 
-        Ok(update_rectangle)
+        Ok(update_rectangle.unwrap_or_else(InclusiveRectangle::empty))
     }
 }
 

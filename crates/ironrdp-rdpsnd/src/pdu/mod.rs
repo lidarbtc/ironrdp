@@ -208,7 +208,7 @@ impl fmt::Display for WaveFormat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AudioFormat {
     pub format: WaveFormat,
     pub n_channels: u16,
@@ -411,7 +411,7 @@ impl Encode for ClientAudioFormatPdu {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u32(self.flags.bits());
-        let volume = u32::from(self.volume_right) << 16 | u32::from(self.volume_left);
+        let volume = (u32::from(self.volume_right) << 16) | u32::from(self.volume_left);
         dst.write_u32(volume);
         dst.write_u32(self.pitch);
         dst.write_u16_be(self.dgram_port);
@@ -599,7 +599,12 @@ impl Encode for TrainingPdu {
         ensure_size!(in: dst, size: self.size());
 
         dst.write_u16(self.timestamp);
-        dst.write_u16(cast_length!("TrainingPdu::wPackSize", self.data.len())?);
+        let len = if self.data.is_empty() {
+            0
+        } else {
+            self.size() + ServerAudioOutputPdu::FIXED_PART_SIZE
+        };
+        dst.write_u16(cast_length!("TrainingPdu::wPackSize", len)?);
         dst.write_slice(&self.data);
 
         Ok(())
@@ -622,8 +627,16 @@ impl<'de> Decode<'de> for TrainingPdu {
 
         let timestamp = src.read_u16();
         let len = src.read_u16() as usize;
-        ensure_size!(in: src, size: len);
-        let data = src.read_slice(len).into();
+        let data = if len != 0 {
+            if len < Self::FIXED_PART_SIZE + ServerAudioOutputPdu::FIXED_PART_SIZE {
+                return Err(invalid_field_err!("TrainingPdu::wPackSize", "too small"));
+            }
+            let len = len - Self::FIXED_PART_SIZE - ServerAudioOutputPdu::FIXED_PART_SIZE;
+            ensure_size!(in: src, size: len);
+            src.read_slice(len).into()
+        } else {
+            Vec::new()
+        };
 
         Ok(Self { timestamp, data })
     }
@@ -765,8 +778,8 @@ impl Encode for SndWavePdu {
     }
 }
 
-impl<'de> SndWavePdu {
-    fn decode(src: &mut ReadCursor<'de>, data_len: usize) -> DecodeResult<Self> {
+impl SndWavePdu {
+    fn decode(src: &mut ReadCursor<'_>, data_len: usize) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         read_padding!(src, 4);
@@ -825,8 +838,8 @@ impl Encode for WavePdu<'_> {
     }
 }
 
-impl<'de> WavePdu<'_> {
-    fn decode(src: &mut ReadCursor<'de>, body_size: u16) -> DecodeResult<Self> {
+impl WavePdu<'_> {
+    fn decode(src: &mut ReadCursor<'_>, body_size: u16) -> DecodeResult<Self> {
         let info = WaveInfoPdu::decode(src)?;
         let body_size = body_size as usize;
         let data_len = body_size
@@ -943,8 +956,8 @@ impl Encode for WaveEncryptPdu {
     }
 }
 
-impl<'de> WaveEncryptPdu {
-    fn decode(src: &mut ReadCursor<'de>, version: Version) -> DecodeResult<Self> {
+impl WaveEncryptPdu {
+    fn decode(src: &mut ReadCursor<'_>, version: Version) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
         let timestamp = src.read_u16();
@@ -1062,7 +1075,7 @@ impl Encode for VolumePdu {
     fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_size!(in: dst, size: self.size());
 
-        let volume = u32::from(self.volume_right) << 16 | u32::from(self.volume_left);
+        let volume = (u32::from(self.volume_right) << 16) | u32::from(self.volume_left);
         dst.write_u32(volume);
 
         Ok(())

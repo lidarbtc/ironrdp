@@ -40,7 +40,6 @@ export class WasmBridgeService {
     private sessionEvent: Subject<SessionEvent> = new Subject();
     private scale: BehaviorSubject<ScreenScale> = new BehaviorSubject(ScreenScale.Fit as ScreenScale);
     private canvas?: HTMLCanvasElement;
-    private keyboardActive: boolean = false;
     private keyboardUnicodeMode: boolean = false;
     private backendSupportsUnicodeKeyboardShortcuts: boolean | undefined = undefined;
     private onRemoteClipboardChanged?: OnRemoteClipboardChanged;
@@ -48,6 +47,7 @@ export class WasmBridgeService {
     private onForceClipboardUpdate?: OnForceClipboardUpdate;
     private cursorHasOverride: boolean = false;
     private lastCursorStyle: string = 'default';
+    private enableClipboard: boolean = true;
 
     resize: Observable<ResizeEvent>;
     session?: Session;
@@ -74,6 +74,11 @@ export class WasmBridgeService {
         ironrdp_init(LogType[debug]);
     }
 
+    // If set to false, the clipboard will not be enabled and the callbacks will not be registered to the Rust side
+    setEnableClipboard(enable: boolean) {
+        this.enableClipboard = enable;
+    }
+
     /// Callback to set the local clipboard content to data received from the remote.
     setOnRemoteClipboardChanged(callback: OnRemoteClipboardChanged) {
         this.onRemoteClipboardChanged = callback;
@@ -92,18 +97,14 @@ export class WasmBridgeService {
 
     mouseIn(event: MouseEvent) {
         this.syncModifier(event);
-        this.keyboardActive = true;
     }
 
     mouseOut(_event: MouseEvent) {
-        this.keyboardActive = false;
         this.releaseAllInputs();
     }
 
     sendKeyboardEvent(evt: KeyboardEvent) {
-        if (this.keyboardActive) {
-            this.sendKeyboard(evt);
-        }
+        this.sendKeyboard(evt);
     }
 
     shutdown() {
@@ -119,9 +120,6 @@ export class WasmBridgeService {
     }
 
     updateMousePosition(position: MousePosition) {
-        if (!this.keyboardActive) {
-            this.keyboardActive = true;
-        }
         this.doTransactionFromDeviceEvents([DeviceEvent.new_mouse_move(position.x, position.y)]);
         this.mousePosition.next(position);
     }
@@ -149,18 +147,20 @@ export class WasmBridgeService {
         sessionBuilder.set_cursor_style_callback_context(this);
         sessionBuilder.set_cursor_style_callback(this.setCursorStyleCallback);
         sessionBuilder.kdc_proxy_url(kdc_proxy_url);
-        use_display_control && sessionBuilder.use_display_control();
+        if (use_display_control) {
+            sessionBuilder.use_display_control();
+        }
 
         if (preConnectionBlob != null) {
             sessionBuilder.pcb(preConnectionBlob);
         }
-        if (this.onRemoteClipboardChanged != null) {
+        if (this.onRemoteClipboardChanged != null && this.enableClipboard) {
             sessionBuilder.remote_clipboard_changed_callback(this.onRemoteClipboardChanged);
         }
-        if (this.onRemoteReceivedFormatList != null) {
+        if (this.onRemoteReceivedFormatList != null && this.enableClipboard) {
             sessionBuilder.remote_received_format_list_callback(this.onRemoteReceivedFormatList);
         }
-        if (this.onForceClipboardUpdate != null) {
+        if (this.onForceClipboardUpdate != null && this.enableClipboard) {
             sessionBuilder.force_clipboard_update_callback(this.onForceClipboardUpdate);
         }
 

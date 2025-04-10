@@ -1,11 +1,9 @@
-mod bitmap;
-pub(crate) mod rfx;
-
-use core::{cmp, mem};
+use core::fmt;
 
 use anyhow::{Context, Result};
-use ironrdp_core::{Encode, WriteCursor};
-use ironrdp_pdu::fast_path::{EncryptionFlags, FastPathHeader, FastPathUpdatePdu, Fragmentation, UpdateCode};
+use ironrdp_acceptor::DesktopSize;
+use ironrdp_pdu::encode_vec;
+use ironrdp_pdu::fast_path::UpdateCode;
 use ironrdp_pdu::geometry::ExclusiveRectangle;
 use ironrdp_pdu::pointer::{ColorPointerAttribute, Point16, PointerAttribute, PointerPositionAttribute};
 use ironrdp_pdu::rdp::capability_sets::{CmdFlags, EntropyBits};
@@ -14,7 +12,13 @@ use ironrdp_pdu::surface_commands::{ExtendedBitmapDataPdu, SurfaceBitsPdu, Surfa
 use self::bitmap::BitmapEncoder;
 use self::rfx::RfxEncoder;
 use super::BitmapUpdate;
-use crate::{ColorPointer, PixelOrder, RGBAPointer};
+use crate::{time_warn, ColorPointer, DisplayUpdate, Framebuffer, RGBAPointer};
+
+mod bitmap;
+mod fast_path;
+pub(crate) mod rfx;
+
+pub(crate) use fast_path::*;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -22,54 +26,51 @@ enum CodecId {
     None = 0x0,
 }
 
-// this is the maximum amount of data (not including headers) we can send in a single TS_FP_UPDATE_PDU
-const MAX_FASTPATH_UPDATE_SIZE: usize = 16_374;
-
-const FASTPATH_HEADER_SIZE: usize = 6;
-
 pub(crate) struct UpdateEncoder {
-    buffer: Vec<u8>,
-    bitmap: BitmapEncoder,
-    remotefx: Option<(RfxEncoder, u8)>,
-    update: for<'a> fn(&'a mut UpdateEncoder, BitmapUpdate) -> Result<UpdateFragmenter<'a>>,
+    desktop_size: DesktopSize,
+    // FIXME: draw updates on the framebuffer
+    framebuffer: Option<Framebuffer>,
+    bitmap_updater: BitmapUpdater,
+}
+
+impl fmt::Debug for UpdateEncoder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UpdateEncoder")
+            .field("bitmap_update", &self.bitmap_updater)
+            .finish()
+    }
 }
 
 impl UpdateEncoder {
-    pub(crate) fn new(surface_flags: CmdFlags, remotefx: Option<(EntropyBits, u8)>) -> Self {
-        let update = if !surface_flags.contains(CmdFlags::SET_SURFACE_BITS) {
-            Self::bitmap_update
+    pub(crate) fn new(desktop_size: DesktopSize, surface_flags: CmdFlags, remotefx: Option<(EntropyBits, u8)>) -> Self {
+        let bitmap_updater = if !surface_flags.contains(CmdFlags::SET_SURFACE_BITS) {
+            BitmapUpdater::Bitmap(BitmapHandler::new())
         } else if remotefx.is_some() {
-            Self::remotefx_update
+            let (algo, id) = remotefx.unwrap();
+            BitmapUpdater::RemoteFx(RemoteFxHandler::new(algo, id))
         } else {
-            Self::none_update
+            BitmapUpdater::None(NoneHandler)
         };
 
         Self {
-            buffer: vec![0; 16384],
-            bitmap: BitmapEncoder::new(),
-            remotefx: remotefx.map(|(algo, id)| (RfxEncoder::new(algo), id)),
-            update,
+            desktop_size,
+            framebuffer: None,
+            bitmap_updater,
         }
     }
 
-    fn encode_pdu(&mut self, pdu: impl Encode) -> Result<usize> {
-        loop {
-            let mut cursor = WriteCursor::new(self.buffer.as_mut_slice());
-            match pdu.encode(&mut cursor) {
-                Err(e) => match e.kind() {
-                    ironrdp_core::EncodeErrorKind::NotEnoughBytes { .. } => {
-                        self.buffer.resize(self.buffer.len() * 2, 0);
-                        debug!("encoder buffer resized to: {}", self.buffer.len() * 2);
-                    }
-
-                    _ => Err(e).context("PDU encode error")?,
-                },
-                Ok(()) => return Ok(cursor.pos()),
-            }
+    pub(crate) fn update(&mut self, update: DisplayUpdate) -> EncoderIter<'_> {
+        EncoderIter {
+            encoder: self,
+            update: Some(update),
         }
     }
 
-    pub(crate) fn rgba_pointer(&mut self, ptr: RGBAPointer) -> Result<UpdateFragmenter<'_>> {
+    pub(crate) fn set_desktop_size(&mut self, size: DesktopSize) {
+        self.desktop_size = size;
+    }
+
+    fn rgba_pointer(ptr: RGBAPointer) -> Result<UpdateFragmenter> {
         let xor_mask = ptr.data;
 
         let hot_spot = Point16 {
@@ -88,11 +89,10 @@ impl UpdateEncoder {
             xor_bpp: 32,
             color_pointer,
         };
-        let len = self.encode_pdu(ptr)?;
-        Ok(UpdateFragmenter::new(UpdateCode::NewPointer, &self.buffer[..len]))
+        Ok(UpdateFragmenter::new(UpdateCode::NewPointer, encode_vec(&ptr)?))
     }
 
-    pub(crate) fn color_pointer(&mut self, ptr: ColorPointer) -> Result<UpdateFragmenter<'_>> {
+    fn color_pointer(ptr: ColorPointer) -> Result<UpdateFragmenter> {
         let hot_spot = Point16 {
             x: ptr.hot_x,
             y: ptr.hot_y,
@@ -105,46 +105,130 @@ impl UpdateEncoder {
             xor_mask: &ptr.xor_mask,
             and_mask: &ptr.and_mask,
         };
-        let len = self.encode_pdu(ptr)?;
-        Ok(UpdateFragmenter::new(UpdateCode::ColorPointer, &self.buffer[..len]))
+        Ok(UpdateFragmenter::new(UpdateCode::ColorPointer, encode_vec(&ptr)?))
     }
 
-    #[allow(clippy::unused_self)]
-    pub(crate) fn default_pointer(&mut self) -> Result<UpdateFragmenter<'_>> {
-        Ok(UpdateFragmenter::new(UpdateCode::DefaultPointer, &[]))
+    fn default_pointer() -> Result<UpdateFragmenter> {
+        Ok(UpdateFragmenter::new(UpdateCode::DefaultPointer, vec![]))
     }
 
-    #[allow(clippy::unused_self)]
-    pub(crate) fn hide_pointer(&mut self) -> Result<UpdateFragmenter<'_>> {
-        Ok(UpdateFragmenter::new(UpdateCode::HiddenPointer, &[]))
+    fn hide_pointer() -> Result<UpdateFragmenter> {
+        Ok(UpdateFragmenter::new(UpdateCode::HiddenPointer, vec![]))
     }
 
-    pub(crate) fn pointer_position(&mut self, pos: PointerPositionAttribute) -> Result<UpdateFragmenter<'_>> {
-        let len = self.encode_pdu(pos)?;
-        Ok(UpdateFragmenter::new(UpdateCode::PositionPointer, &self.buffer[..len]))
+    fn pointer_position(pos: PointerPositionAttribute) -> Result<UpdateFragmenter> {
+        Ok(UpdateFragmenter::new(UpdateCode::PositionPointer, encode_vec(&pos)?))
     }
 
-    pub(crate) fn bitmap(&mut self, bitmap: BitmapUpdate) -> Result<UpdateFragmenter<'_>> {
-        let update = self.update;
-
-        update(self, bitmap)
+    async fn bitmap(&mut self, bitmap: BitmapUpdate) -> Result<UpdateFragmenter> {
+        // Clone to satisfy spawn_blocking 'static requirement
+        // this should be cheap, even if using bitmap, since vec![] will be empty
+        let mut updater = self.bitmap_updater.clone();
+        let (res, bitmap) =
+            tokio::task::spawn_blocking(move || time_warn!("Encoding bitmap", 10, (updater.handle(&bitmap), bitmap)))
+                .await
+                .unwrap();
+        if bitmap.x == 0
+            && bitmap.y == 0
+            && bitmap.width.get() == self.desktop_size.width
+            && bitmap.height.get() == self.desktop_size.height
+        {
+            match bitmap.try_into() {
+                Ok(framebuffer) => self.framebuffer = Some(framebuffer),
+                Err(err) => warn!("Failed to convert bitmap to framebuffer: {}", err),
+            }
+        }
+        res
     }
+}
 
-    pub(crate) fn fragmenter_from_owned(&self, res: UpdateFragmenterOwned) -> UpdateFragmenter<'_> {
-        UpdateFragmenter {
-            code: res.code,
-            index: res.index,
-            data: &self.buffer[0..res.len],
+pub(crate) struct EncoderIter<'a> {
+    encoder: &'a mut UpdateEncoder,
+    update: Option<DisplayUpdate>,
+}
+
+impl EncoderIter<'_> {
+    pub(crate) async fn next(&mut self) -> Option<Result<UpdateFragmenter>> {
+        let update = self.update.take()?;
+        let encoder = &mut self.encoder;
+
+        let res = match update {
+            DisplayUpdate::Bitmap(bitmap) => encoder.bitmap(bitmap).await,
+            DisplayUpdate::PointerPosition(pos) => UpdateEncoder::pointer_position(pos),
+            DisplayUpdate::RGBAPointer(ptr) => UpdateEncoder::rgba_pointer(ptr),
+            DisplayUpdate::ColorPointer(ptr) => UpdateEncoder::color_pointer(ptr),
+            DisplayUpdate::HidePointer => UpdateEncoder::hide_pointer(),
+            DisplayUpdate::DefaultPointer => UpdateEncoder::default_pointer(),
+            DisplayUpdate::Resize(_) => return None,
+        };
+
+        Some(res)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum BitmapUpdater {
+    None(NoneHandler),
+    Bitmap(BitmapHandler),
+    RemoteFx(RemoteFxHandler),
+}
+
+impl BitmapUpdater {
+    fn handle(&mut self, bitmap: &BitmapUpdate) -> Result<UpdateFragmenter> {
+        match self {
+            Self::None(up) => up.handle(bitmap),
+            Self::Bitmap(up) => up.handle(bitmap),
+            Self::RemoteFx(up) => up.handle(bitmap),
         }
     }
+}
 
-    fn bitmap_update(&mut self, bitmap: BitmapUpdate) -> Result<UpdateFragmenter<'_>> {
+trait BitmapUpdateHandler {
+    fn handle(&mut self, bitmap: &BitmapUpdate) -> Result<UpdateFragmenter>;
+}
+
+#[derive(Clone, Debug)]
+struct NoneHandler;
+
+impl BitmapUpdateHandler for NoneHandler {
+    fn handle(&mut self, bitmap: &BitmapUpdate) -> Result<UpdateFragmenter> {
+        let stride = usize::from(bitmap.format.bytes_per_pixel()) * usize::from(bitmap.width.get());
+        let mut data = Vec::with_capacity(stride * usize::from(bitmap.height.get()));
+        for row in bitmap.data.chunks(bitmap.stride).rev() {
+            data.extend_from_slice(&row[..stride]);
+        }
+        set_surface(bitmap, CodecId::None as u8, &data)
+    }
+}
+
+#[derive(Clone)]
+struct BitmapHandler {
+    bitmap: BitmapEncoder,
+}
+
+impl fmt::Debug for BitmapHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BitmapHandler").finish()
+    }
+}
+
+impl BitmapHandler {
+    fn new() -> Self {
+        Self {
+            bitmap: BitmapEncoder::new(),
+        }
+    }
+}
+
+impl BitmapUpdateHandler for BitmapHandler {
+    fn handle(&mut self, bitmap: &BitmapUpdate) -> Result<UpdateFragmenter> {
+        let mut buffer = vec![0; bitmap.data.len() * 2]; // TODO: estimate bitmap encoded size
         let len = loop {
-            match self.bitmap.encode(&bitmap, self.buffer.as_mut_slice()) {
+            match self.bitmap.encode(bitmap, buffer.as_mut_slice()) {
                 Err(e) => match e.kind() {
                     ironrdp_core::EncodeErrorKind::NotEnoughBytes { .. } => {
-                        self.buffer.resize(self.buffer.len() * 2, 0);
-                        debug!("encoder buffer resized to: {}", self.buffer.len() * 2);
+                        buffer.resize(buffer.len() * 2, 0);
+                        debug!("encoder buffer resized to: {}", buffer.len() * 2);
                     }
 
                     _ => Err(e).context("bitmap encode error")?,
@@ -153,148 +237,66 @@ impl UpdateEncoder {
             }
         };
 
-        Ok(UpdateFragmenter::new(UpdateCode::Bitmap, &self.buffer[..len]))
+        buffer.truncate(len);
+        Ok(UpdateFragmenter::new(UpdateCode::Bitmap, buffer))
     }
+}
 
-    fn set_surface(&mut self, bitmap: BitmapUpdate, codec_id: u8, data: Vec<u8>) -> Result<UpdateFragmenter<'_>> {
-        let destination = ExclusiveRectangle {
-            left: bitmap.left,
-            top: bitmap.top,
-            right: bitmap.left + bitmap.width.get(),
-            bottom: bitmap.top + bitmap.height.get(),
-        };
-        let extended_bitmap_data = ExtendedBitmapDataPdu {
-            bpp: bitmap.format.bytes_per_pixel() * 8,
-            width: bitmap.width.get(),
-            height: bitmap.height.get(),
+#[derive(Debug, Clone)]
+struct RemoteFxHandler {
+    remotefx: RfxEncoder,
+    codec_id: u8,
+}
+
+impl RemoteFxHandler {
+    fn new(algo: EntropyBits, codec_id: u8) -> Self {
+        Self {
+            remotefx: RfxEncoder::new(algo),
             codec_id,
-            header: None,
-            data: &data,
-        };
-        let pdu = SurfaceBitsPdu {
-            destination,
-            extended_bitmap_data,
-        };
-        let cmd = SurfaceCommand::SetSurfaceBits(pdu);
-        let len = self.encode_pdu(cmd)?;
-        Ok(UpdateFragmenter::new(UpdateCode::SurfaceCommands, &self.buffer[..len]))
+        }
     }
+}
 
-    fn remotefx_update(&mut self, bitmap: BitmapUpdate) -> Result<UpdateFragmenter<'_>> {
-        let (remotefx, codec_id) = self.remotefx.as_mut().unwrap();
-        let codec_id = *codec_id;
-        let data = remotefx.encode(&bitmap).context("RemoteFX encoding")?;
-
-        self.set_surface(bitmap, codec_id, data)
-    }
-
-    fn none_update(&mut self, mut bitmap: BitmapUpdate) -> Result<UpdateFragmenter<'_>> {
-        let stride = usize::from(bitmap.format.bytes_per_pixel()) * usize::from(bitmap.width.get());
-        let data = match bitmap.order {
-            PixelOrder::BottomToTop => {
-                if stride == bitmap.stride {
-                    mem::take(&mut bitmap.data)
-                } else {
-                    let mut data = Vec::with_capacity(stride * usize::from(bitmap.height.get()));
-                    for row in bitmap.data.chunks(bitmap.stride) {
-                        data.extend_from_slice(&row[..stride]);
+impl BitmapUpdateHandler for RemoteFxHandler {
+    fn handle(&mut self, bitmap: &BitmapUpdate) -> Result<UpdateFragmenter> {
+        let mut buffer = vec![0; bitmap.data.len()];
+        let len = loop {
+            match self.remotefx.encode(bitmap, buffer.as_mut_slice()) {
+                Err(e) => match e.kind() {
+                    ironrdp_core::EncodeErrorKind::NotEnoughBytes { .. } => {
+                        buffer.resize(buffer.len() * 2, 0);
+                        debug!("encoder buffer resized to: {}", buffer.len() * 2);
                     }
-                    data
-                }
-            }
-            PixelOrder::TopToBottom => {
-                let mut data = Vec::with_capacity(stride * usize::from(bitmap.height.get()));
-                for row in bitmap.data.chunks(bitmap.stride).rev() {
-                    data.extend_from_slice(&row[..stride]);
-                }
-                data
+
+                    _ => Err(e).context("RemoteFX encode error")?,
+                },
+                Ok(len) => break len,
             }
         };
 
-        self.set_surface(bitmap, CodecId::None as u8, data)
+        set_surface(bitmap, self.codec_id, &buffer[..len])
     }
 }
 
-pub(crate) struct UpdateFragmenterOwned {
-    code: UpdateCode,
-    index: usize,
-    len: usize,
-}
-
-pub(crate) struct UpdateFragmenter<'a> {
-    code: UpdateCode,
-    index: usize,
-    data: &'a [u8],
-}
-
-impl<'a> UpdateFragmenter<'a> {
-    pub(crate) fn new(code: UpdateCode, data: &'a [u8]) -> Self {
-        Self { code, index: 0, data }
-    }
-
-    pub(crate) fn into_owned(self) -> UpdateFragmenterOwned {
-        UpdateFragmenterOwned {
-            code: self.code,
-            index: self.index,
-            len: self.data.len(),
-        }
-    }
-
-    pub(crate) fn size_hint(&self) -> usize {
-        FASTPATH_HEADER_SIZE + cmp::min(self.data.len(), MAX_FASTPATH_UPDATE_SIZE)
-    }
-
-    pub(crate) fn next(&mut self, dst: &mut [u8]) -> Option<usize> {
-        let (consumed, written) = self.encode_next(dst)?;
-        self.data = &self.data[consumed..];
-        self.index = self.index.checked_add(1)?;
-        Some(written)
-    }
-
-    fn encode_next(&mut self, dst: &mut [u8]) -> Option<(usize, usize)> {
-        match self.data.len() {
-            0 => None,
-
-            1..=MAX_FASTPATH_UPDATE_SIZE => {
-                let frag = if self.index > 0 {
-                    Fragmentation::Last
-                } else {
-                    Fragmentation::Single
-                };
-
-                self.encode_fastpath(frag, self.data, dst)
-                    .map(|written| (self.data.len(), written))
-            }
-
-            _ => {
-                let frag = if self.index > 0 {
-                    Fragmentation::Next
-                } else {
-                    Fragmentation::First
-                };
-
-                self.encode_fastpath(frag, &self.data[..MAX_FASTPATH_UPDATE_SIZE], dst)
-                    .map(|written| (MAX_FASTPATH_UPDATE_SIZE, written))
-            }
-        }
-    }
-
-    fn encode_fastpath(&self, frag: Fragmentation, data: &[u8], dst: &mut [u8]) -> Option<usize> {
-        let mut cursor = WriteCursor::new(dst);
-
-        let update = FastPathUpdatePdu {
-            fragmentation: frag,
-            update_code: self.code,
-            compression_flags: None,
-            compression_type: None,
-            data,
-        };
-
-        let header = FastPathHeader::new(EncryptionFlags::empty(), update.size());
-
-        header.encode(&mut cursor).ok()?;
-        update.encode(&mut cursor).ok()?;
-
-        Some(cursor.pos())
-    }
+fn set_surface(bitmap: &BitmapUpdate, codec_id: u8, data: &[u8]) -> Result<UpdateFragmenter> {
+    let destination = ExclusiveRectangle {
+        left: bitmap.x,
+        top: bitmap.y,
+        right: bitmap.x + bitmap.width.get(),
+        bottom: bitmap.y + bitmap.height.get(),
+    };
+    let extended_bitmap_data = ExtendedBitmapDataPdu {
+        bpp: bitmap.format.bytes_per_pixel() * 8,
+        width: bitmap.width.get(),
+        height: bitmap.height.get(),
+        codec_id,
+        header: None,
+        data,
+    };
+    let pdu = SurfaceBitsPdu {
+        destination,
+        extended_bitmap_data,
+    };
+    let cmd = SurfaceCommand::SetSurfaceBits(pdu);
+    Ok(UpdateFragmenter::new(UpdateCode::SurfaceCommands, encode_vec(&cmd)?))
 }

@@ -21,7 +21,6 @@ pub mod geometry;
 pub mod input;
 pub mod mcs;
 pub mod nego;
-pub mod padding;
 pub mod pcb;
 pub mod rdp;
 pub mod tpdu;
@@ -218,23 +217,6 @@ impl PduHint for FastPathHint {
     }
 }
 
-pub use legacy::*;
-
-// TODO: Delete these traits at some point
-mod legacy {
-
-    pub trait PduBufferParsing<'a>: Sized {
-        type Error;
-
-        fn from_buffer(mut buffer: &'a [u8]) -> Result<Self, Self::Error> {
-            Self::from_buffer_consume(&mut buffer)
-        }
-        fn from_buffer_consume(buffer: &mut &'a [u8]) -> Result<Self, Self::Error>;
-        fn to_buffer_consume(&self, buffer: &mut &mut [u8]) -> Result<(), Self::Error>;
-        fn buffer_length(&self) -> usize;
-    }
-}
-
 // Private! Used by the macros.
 #[doc(hidden)]
 pub use ironrdp_core;
@@ -245,8 +227,7 @@ pub use ironrdp_core;
 #[doc(hidden)]
 #[deprecated(since = "0.1.0", note = "use ironrdp_core::{ReadCursor, WriteCursor}")]
 pub mod cursor {
-    pub use ironrdp_core::ReadCursor;
-    pub use ironrdp_core::WriteCursor;
+    pub use ironrdp_core::{ReadCursor, WriteCursor};
 }
 
 #[doc(hidden)]
